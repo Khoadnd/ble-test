@@ -573,8 +573,38 @@
 
         // ═══════════════════════════════════════════════════════
         //  BLE — NavPacket sender
-        //  Struct: { uint8 icon_id, uint32 dist_meters (LE), char[16] street }
+        //  Struct: { uint8 icon_id, uint32 dist_meters (LE), char[32] street }
+        //  Total: 37 bytes
         // ═══════════════════════════════════════════════════════
+
+        // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
+        function stripDiacritics(str) {
+            // Vietnamese-specific replacements for đ/Đ (not handled by NFD)
+            str = str.replace(/đ/g, 'd').replace(/Đ/g, 'D');
+            // NFD decompose then strip combining marks
+            return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        }
+
+        // Truncate a string so its UTF-8 encoding fits within maxBytes
+        function truncateToBytes(str, maxBytes) {
+            const encoder = new TextEncoder();
+            let encoded = encoder.encode(str);
+            if (encoded.length <= maxBytes) return encoded;
+            // Binary search for longest substring that fits
+            let lo = 0, hi = str.length;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if (encoder.encode(str.substring(0, mid)).length <= maxBytes) {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return encoder.encode(str.substring(0, lo));
+        }
+
+        const PACKET_SIZE = 37;     // 1 + 4 + 32
+        const STREET_MAX_BYTES = 32;
 
         async function sendNavPacket(iconId, distMeters, street) {
             if (!bleChar || !bleConnected || isWriting) return;
@@ -585,15 +615,16 @@
 
             isWriting = true;
             try {
-                const buf = new ArrayBuffer(21);
+                const buf = new ArrayBuffer(PACKET_SIZE);
                 const dv = new DataView(buf);
                 dv.setUint8(0, iconId);
                 dv.setUint32(1, Math.round(distMeters), true); // little-endian
 
-                // Write street name (max 16 chars, null-padded)
-                const streetBytes = new TextEncoder().encode((street || '').substring(0, 16));
+                // Strip diacritics for ESP32 display, truncate to fit 32 bytes
+                const ascii = stripDiacritics(street || '');
+                const streetBytes = truncateToBytes(ascii, STREET_MAX_BYTES);
                 const u8 = new Uint8Array(buf);
-                u8.set(streetBytes, 5);
+                u8.set(streetBytes, 5);   // rest is zero-padded by ArrayBuffer
 
                 await bleChar.writeValueWithoutResponse(buf);
             } catch (e) {
