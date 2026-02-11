@@ -298,14 +298,23 @@
         
         async function connect() {
             try {
+                // Check if Web Bluetooth is available
+                if (!navigator.bluetooth) {
+                    log('❌ Web Bluetooth API is not available!', 'info');
+                    log('⚠️ Ensure you are using HTTPS or Bluefy browser', 'info');
+                    alert('Web Bluetooth not available. Please use:\n1. Bluefy browser on iOS\n2. Chrome on Android\n3. HTTPS website (not HTTP)');
+                    return;
+                }
+                
                 log('Requesting Bluetooth Device...', 'info');
+                log('📱 Please select "ESP32-BLE-Test" from the list', 'info');
                 
                 bluetoothDevice = await navigator.bluetooth.requestDevice({
                     filters: [{ name: 'ESP32-BLE-Test' }],
                     optionalServices: [SERVICE_UUID]
                 });
                 
-                log(`Connected to device: ${bluetoothDevice.name}`, 'info');
+                log(`✓ Selected device: ${bluetoothDevice.name}`, 'info');
                 
                 bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
                 
@@ -330,7 +339,13 @@
                 updateStatus(true);
                 
             } catch(error) {
-                log(`❌ Error: ${error.message}`, 'info');
+                log(`❌ Error: ${error.message || error}`, 'info');
+                if (error.message && error.message.includes('User cancelled')) {
+                    log('ℹ️ Connection cancelled by user', 'info');
+                } else if (!error.message) {
+                    log('⚠️ Unknown error - check console for details', 'info');
+                    console.error('Bluetooth error:', error);
+                }
                 updateStatus(false);
             }
         }
@@ -397,9 +412,27 @@
             }
         });
         
-        // Log when page loads
+        // Check Web Bluetooth support on page load
         window.addEventListener('load', () => {
-            log('🌐 Page loaded - Ready for Bluetooth', 'info');
+            log('🌐 Page loaded', 'info');
+            
+            // Check if running on HTTPS or localhost
+            const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+            
+            if (!navigator.bluetooth) {
+                log('❌ Web Bluetooth API NOT available', 'info');
+                log('⚠️ Use Bluefy on iOS or Chrome on Android', 'info');
+                if (!isSecure) {
+                    log('⚠️ Site must use HTTPS for Web Bluetooth', 'info');
+                }
+            } else {
+                log('✅ Web Bluetooth API available', 'info');
+                log('📱 Ready to connect to ESP32', 'info');
+            }
+            
+            if (!isSecure) {
+                log('⚠️ Not using HTTPS - may have issues', 'info');
+            }
         });
     </script>
 </body>
