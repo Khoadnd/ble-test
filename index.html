@@ -97,8 +97,10 @@
   <button class="connect-btn" onclick="connectToESP32()">
     🔵 Connect to ESP32
   </button>
-  
-  <div class="status disconnected" id="status">
+    <button class="test-btn" onclick="sendToESP32()" id="sendBtn" disabled>
+    ➡️ Send to ESP32
+  </button>
+    <div class="status disconnected" id="status">
     ❌ Not Connected
   </div>
 
@@ -131,6 +133,26 @@
       }
     }
 
+    async function sendToESP32() {
+      if (!characteristic) {
+        log('❌ Not connected');
+        return;
+      }
+      
+      try {
+        const message = "Hello from Browser!";
+        const encoder = new TextEncoder();
+        const data = encoder.encode(message);
+        
+        log(`➡️ Sending: "${message}"`);
+        await characteristic.writeValue(data);
+        log('✅ Sent successfully');
+      } catch (error) {
+        log(`❌ Send error: ${error.message}`);
+        console.error(error);
+      }
+    }
+
     async function connectToESP32() {
       try {
         log('🔍 Searching for ESP32_Ping_Test...');
@@ -157,27 +179,41 @@
         
         log('🔍 Getting characteristic...');
         characteristic = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
+        log(`✅ Characteristic properties: ${JSON.stringify(characteristic.properties)}`);
         
         log('🔔 Enabling notifications...');
         
         // Add event listener BEFORE starting notifications
         characteristic.addEventListener('characteristicvaluechanged', (event) => {
-          console.log('🔔 Notification received!', event);
-          const value = new TextDecoder().decode(event.target.value);
-          pingCount++;
+          console.log('🔔 RAW Notification event:', event);
+          console.log('🔔 Event target:', event.target);
+          console.log('🔔 Event target value:', event.target.value);
           
-          log(`📨 ${value} (Ping #${pingCount})`, true);
-          document.getElementById('pingCount').textContent = pingCount;
+          try {
+            const value = new TextDecoder().decode(event.target.value);
+            pingCount++;
+            
+            console.log(`🔔 Decoded value: "${value}", Count: ${pingCount}`);
+            log(`📨 ${value} (Ping #${pingCount})`, true);
+            document.getElementById('pingCount').textContent = pingCount;
+          } catch (e) {
+            console.error('Decode error:', e);
+            log(`❌ Decode error: ${e.message}`);
+          }
         });
         
         await characteristic.startNotifications();
         log('✅ Notifications enabled');
+        
+        // Enable send button
+        document.getElementById('sendBtn').disabled = false;
 
         document.getElementById('status').className = 'status connected';
         document.getElementById('status').textContent = '✅ Connected - ESP32 will ping every 5 seconds';
         log('🎉 Ready! Counting pings from ESP32');
         log('💡 Keep this page open to receive pings');
         log('⏳ Waiting for pings... (every 5 seconds)');
+        log('🔍 Check browser console (F12) for detailed logs');
         
       } catch (error) {
         log(`❌ Error: ${error.message}`);
