@@ -250,9 +250,10 @@
     </div>
 
     <script>
-        const SERVICE_UUID = 0x00FF;
-        const TX_CHARACTERISTIC_UUID = 0xFF01;  // ESP32 sends to web
-        const RX_CHARACTERISTIC_UUID = 0xFF02;  // Web sends to ESP32
+        // Convert 16-bit UUIDs to standard 128-bit Bluetooth UUID format
+        const SERVICE_UUID = '000000ff-0000-1000-8000-00805f9b34fb';
+        const TX_CHARACTERISTIC_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';  // ESP32 sends to web
+        const RX_CHARACTERISTIC_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';  // Web sends to ESP32
         
         let bluetoothDevice = null;
         let gattServer = null;
