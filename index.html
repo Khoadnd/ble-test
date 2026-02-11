@@ -3,8 +3,21 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 BLE Controller - Bluefy Compatible</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>MotoHUD Navigator</title>
+    <meta name="description" content="Motorcycle HUD Navigation Brain — Mapbox + BLE">
+
+    <!-- Mapbox GL JS -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
+    <!-- Mapbox Geocoder -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.3/mapbox-gl-geocoder.css"
+        rel="stylesheet">
+    <script
+        src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.3/mapbox-gl-geocoder.min.js"></script>
+    <!-- Turf.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+
     <style>
         * {
             margin: 0;
@@ -12,588 +25,897 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --accent: #00c8ff;
+            --accent-dim: rgba(0, 200, 255, 0.15);
+            --bg: #0a0e1a;
+            --card: #141828;
+            --card-border: #1e2540;
+            --text: #e8eaf0;
+            --text-dim: #6b7394;
+            --success: #00e878;
+            --danger: #ff4466;
+            --radius: 14px;
+            --safe-bottom: env(safe-area-inset-bottom, 10px);
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            padding: 30px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        /* ── Map ─────────────────────────────────── */
+        #map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
         }
 
-        h1 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 28px;
+        /* ── Top Bar ─────────────────────────────── */
+        .top-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 50px 16px 12px;
+            background: linear-gradient(to bottom, rgba(10, 14, 26, 0.95) 60%, transparent);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .subtitle {
-            color: #888;
-            margin-bottom: 30px;
-            font-size: 14px;
+        .ble-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--danger);
+            flex-shrink: 0;
+            transition: background 0.3s;
+            box-shadow: 0 0 8px var(--danger);
         }
 
-        .status {
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            font-weight: 500;
+        .ble-indicator.connected {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
         }
 
-        .status.disconnected {
-            background: #fee;
-            color: #c33;
-            border: 2px solid #fcc;
+        .top-bar .status-text {
+            font-size: 13px;
+            color: var(--text-dim);
+            flex: 1;
         }
 
-        .status.connected {
-            background: #efe;
-            color: #3c3;
-            border: 2px solid #cfc;
+        /* ── Bottom Sheet ────────────────────────── */
+        .bottom-sheet {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--card);
+            border-top: 1px solid var(--card-border);
+            border-radius: 20px 20px 0 0;
+            padding: 16px 16px calc(12px + var(--safe-bottom));
+            z-index: 10;
+            transition: transform 0.3s ease;
         }
 
-        button {
-            width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            border: none;
-            border-radius: 10px;
+        .sheet-handle {
+            width: 36px;
+            height: 4px;
+            background: var(--card-border);
+            border-radius: 2px;
+            margin: 0 auto 14px;
+        }
+
+        /* ── Nav Info (shown during navigation) ── */
+        .nav-info {
+            display: none;
+            text-align: center;
+            margin-bottom: 14px;
+        }
+
+        .nav-info.active {
+            display: block;
+        }
+
+        .nav-icon {
+            font-size: 42px;
+            margin-bottom: 4px;
+        }
+
+        .nav-street {
             font-size: 16px;
             font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            margin-bottom: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        button:active {
-            transform: scale(0.98);
+        .nav-distance {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .nav-unit {
+            font-size: 14px;
+            color: var(--text-dim);
+            margin-left: 4px;
+        }
+
+        /* ── Destination input ───────────────────── */
+        .dest-section {
+            margin-bottom: 12px;
+        }
+
+        .dest-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .dest-input:focus {
+            border-color: var(--accent);
+        }
+
+        .dest-input::placeholder {
+            color: var(--text-dim);
+        }
+
+        /* ── Buttons ─────────────────────────────── */
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            margin-bottom: 8px;
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+            opacity: 0.9;
+        }
+
+        .btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            transform: none;
         }
 
         .btn-connect {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0066ff, #0099ff);
             color: white;
         }
 
-        .btn-connect:hover {
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-disconnect {
-            background: #e74c3c;
+        .btn-navigate {
+            background: linear-gradient(135deg, #00b856, #00e878);
             color: white;
         }
 
-        .btn-send {
-            background: #2ecc71;
+        .btn-stop {
+            background: var(--danger);
             color: white;
         }
 
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            opacity: 0.6;
+        .btn-row {
+            display: flex;
+            gap: 8px;
         }
 
-        .input-group {
-            margin: 20px 0;
+        .btn-row .btn {
+            flex: 1;
         }
 
-        input[type="text"] {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 10px;
-            font-size: 16px;
-            margin-top: 5px;
+        /* ── Log ──────────────────────────────────── */
+        .log-toggle {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-dim);
+            padding: 6px;
+            cursor: pointer;
         }
 
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        label {
-            font-weight: 600;
-            color: #555;
-            display: block;
-            margin-bottom: 5px;
-        }
-
-        .log {
-            background: #f8f9fa;
-            border: 2px solid #e9ecef;
-            border-radius: 10px;
-            padding: 15px;
-            max-height: 300px;
+        .log-panel {
+            display: none;
+            max-height: 150px;
             overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            margin-top: 20px;
+            background: var(--bg);
+            border-radius: 10px;
+            padding: 10px;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 11px;
+            margin-top: 8px;
+        }
+
+        .log-panel.open {
+            display: block;
         }
 
         .log-entry {
-            padding: 5px 0;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .log-entry:last-child {
-            border-bottom: none;
-        }
-
-        .log-entry.received {
-            color: #2ecc71;
+            padding: 3px 0;
+            color: var(--text-dim);
         }
 
         .log-entry.sent {
             color: #3498db;
         }
 
-        .log-entry.info {
-            color: #95a5a6;
+        .log-entry.recv {
+            color: var(--success);
         }
 
-        .timestamp {
-            color: #95a5a6;
-            font-size: 11px;
+        .log-entry.err {
+            color: var(--danger);
         }
 
-        .warning {
-            background: #fff3cd;
-            border: 2px solid #ffc107;
+        /* ── Token Overlay ────────────────────────── */
+        .token-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 14, 26, 0.97);
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .token-overlay.hidden {
+            display: none;
+        }
+
+        .token-card {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 20px;
+            padding: 28px 24px;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        .token-card h2 {
+            font-size: 20px;
+            margin-bottom: 6px;
+        }
+
+        .token-card p {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 16px;
+        }
+
+        .token-card input {
+            width: 100%;
+            padding: 12px 14px;
+            background: var(--bg);
+            border: 1px solid var(--card-border);
             border-radius: 10px;
-            padding: 15px;
-            margin: 20px 0;
-            color: #856404;
+            color: var(--text);
+            font-size: 14px;
+            font-family: 'SF Mono', monospace;
+            outline: none;
+            margin-bottom: 12px;
         }
 
-        .warning strong {
-            display: block;
-            margin-bottom: 5px;
+        .token-card input:focus {
+            border-color: var(--accent);
         }
 
-        .stats {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin: 20px 0;
+        /* ── Geocoder override ───────────────────── */
+        .mapboxgl-ctrl-geocoder {
+            width: 100% !important;
+            max-width: none !important;
+            background: var(--bg) !important;
+            border: 1px solid var(--card-border) !important;
+            border-radius: var(--radius) !important;
+            color: var(--text) !important;
+            box-shadow: none !important;
+            font-size: 15px !important;
         }
 
-        .stat-box {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
+        .mapboxgl-ctrl-geocoder input {
+            color: var(--text) !important;
         }
 
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #667eea;
+        .mapboxgl-ctrl-geocoder .suggestions {
+            background: var(--card) !important;
+            border: 1px solid var(--card-border) !important;
+            border-radius: 10px !important;
         }
 
-        .stat-label {
-            font-size: 12px;
-            color: #888;
-            margin-top: 5px;
+        .mapboxgl-ctrl-geocoder .suggestions .active>a,
+        .mapboxgl-ctrl-geocoder .suggestions>li>a:hover {
+            background: var(--accent-dim) !important;
+            color: var(--text) !important;
+        }
+
+        .mapboxgl-ctrl-geocoder .suggestions>li>a {
+            color: var(--text) !important;
         }
     </style>
 </head>
 
 <body>
-    <div class="container">
-        <h1>🔵 ESP32 BLE Controller</h1>
-        <p class="subtitle">Optimized for Bluefy on iOS</p>
 
-        <div id="status" class="status disconnected">
-            ❌ Disconnected
-            <div style="margin-top: 10px; font-size: 13px;">
-                <strong>Audio Status:</strong> <span id="audioStatus" style="color: #e74c3c;">Stopped</span>
-            </div>
-        </div>
-
-        <div class="warning">
-            <strong>🎵 Auto-Background Mode:</strong>
-            Audio will start automatically when connected. This keeps the app running in the background. Please check
-            the "Now Playing" controls in your Control Center.
-        </div>
-
-        <button id="connectBtn" class="btn-connect">Connect to ESP32</button>
-        <button id="disconnectBtn" class="btn-disconnect" disabled>Disconnect</button>
-
-        <div class="input-group">
-            <label for="messageInput">Send Message to ESP32:</label>
-            <input type="text" id="messageInput" placeholder="Type your message here..." disabled>
-        </div>
-
-        <button id="sendBtn" class="btn-send" disabled>Send Message</button>
-
-        <div class="input-group" style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
-            <label for="intervalInput">Periodic Send Interval (ms):</label>
-            <input type="number" id="intervalInput" value="1000" min="100" placeholder="1000" disabled>
-        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-            <button id="startPeriodicBtn" class="btn-send" disabled>Start Periodic Loop</button>
-            <button id="stopPeriodicBtn" class="btn-disconnect" disabled>Stop Loop</button>
-        </div>
-
-        <div class="stats">
-            <div class="stat-box">
-                <div class="stat-value" id="sentCount">0</div>
-                <div class="stat-label">Messages Sent</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value" id="receivedCount">0</div>
-                <div class="stat-label">Messages Received</div>
-            </div>
-        </div>
-
-        <div>
-            <label>Activity Log:</label>
-            <div id="log" class="log">
-                <div class="log-entry info">
-                    <span class="timestamp">[Ready]</span> Click "Connect to ESP32" to start
-                </div>
-            </div>
+    <!-- ════ TOKEN OVERLAY ════ -->
+    <div class="token-overlay" id="tokenOverlay">
+        <div class="token-card">
+            <h2>🗺️ Mapbox Token</h2>
+            <p>Paste your Mapbox access token below. It will be saved in your browser for next time.</p>
+            <input type="text" id="tokenInput" placeholder="pk.eyJ1Ijo..." autocomplete="off" spellcheck="false">
+            <button class="btn btn-connect" id="tokenBtn">Start Map</button>
         </div>
     </div>
 
+    <!-- ════ MAP ════ -->
+    <div id="map"></div>
+
+    <!-- ════ TOP BAR ════ -->
+    <div class="top-bar">
+        <div class="ble-indicator" id="bleIndicator"></div>
+        <span class="status-text" id="statusText">Tap Connect to pair with MotoHUD</span>
+    </div>
+
+    <!-- ════ BOTTOM SHEET ════ -->
+    <div class="bottom-sheet">
+        <div class="sheet-handle"></div>
+
+        <!-- Nav info (visible during navigation) -->
+        <div class="nav-info" id="navInfo">
+            <div class="nav-icon" id="navIcon">↑</div>
+            <div class="nav-street" id="navStreet">—</div>
+            <div>
+                <span class="nav-distance" id="navDist">--</span>
+                <span class="nav-unit" id="navUnit"></span>
+            </div>
+        </div>
+
+        <!-- Destination search -->
+        <div class="dest-section" id="destSection">
+            <div id="geocoder"></div>
+        </div>
+
+        <!-- Buttons -->
+        <div id="connectRow">
+            <button class="btn btn-connect" id="connectBtn">🔵 Connect to MotoHUD</button>
+        </div>
+        <div id="navRow" style="display:none;">
+            <div class="btn-row">
+                <button class="btn btn-navigate" id="navBtn" disabled>Navigate</button>
+                <button class="btn btn-stop" id="stopBtn" style="display:none;">Stop</button>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="log-toggle" id="logToggle">▼ Show Log</div>
+        <div class="log-panel" id="logPanel"></div>
+    </div>
+
     <script>
-        // Convert 16-bit UUIDs to standard 128-bit Bluetooth UUID format
-        const SERVICE_UUID = '000000ff-0000-1000-8000-00805f9b34fb';
-        const TX_CHARACTERISTIC_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';  // ESP32 sends to web
-        const RX_CHARACTERISTIC_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';  // Web sends to ESP32
+        // ═══════════════════════════════════════════════════════
+        //  CONFIGURATION
+        // ═══════════════════════════════════════════════════════
 
-        let bluetoothDevice = null;
-        let gattServer = null;
-        let txCharacteristic = null;
-        let rxCharacteristic = null;
+        let MAPBOX_TOKEN = localStorage.getItem('mapbox_token') || '';
 
-        let sentCount = 0;
-        let receivedCount = 0;
-        let periodicTimer = null;
-        let periodicCount = 0;
+        // BLE UUIDs — must match ESP32 firmware
+        const BLE_SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+        const BLE_NAV_CHAR_UUID = '12345678-1234-1234-1234-123456789abd';
+        const BLE_DEVICE_NAME = 'MotoHUD';
 
-        // Persistent Audio Object
-        let silentAudio = new Audio();
-        // 5 seconds of silent MP3 (validated)
-        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
-        silentAudio.loop = true;
-        silentAudio.autoplay = true;
+        // Nav update rate (ms)
+        const NAV_UPDATE_INTERVAL = 250;
 
-        // Debugging Audio
-        silentAudio.addEventListener('timeupdate', () => {
-            if (silentAudio.currentTime > 0 && silentAudio.currentTime < 0.5) {
-                // log('🎵 Audio Loop Restarted', 'info');
-            }
-            document.getElementById('audioStatus').textContent = `Playing (${Math.floor(silentAudio.currentTime)}s)`;
-            document.getElementById('audioStatus').style.color = '#2ecc71';
-        });
+        // Maneuver icon map → icon_id for ESP32
+        const MANEUVER_MAP = {
+            'straight': 0, 'turn right': 2, 'turn left': 1,
+            'sharp right': 2, 'sharp left': 1,
+            'slight right': 2, 'slight left': 1,
+            'uturn': 3, 'arrive': 4, 'depart': 0,
+            'merge right': 2, 'merge left': 1,
+            'roundabout': 2, 'rotary': 2,
+            'fork right': 2, 'fork left': 1,
+            'ramp right': 2, 'ramp left': 1,
+            'continue': 0, 'end of road right': 2, 'end of road left': 1,
+        };
 
-        const connectBtn = document.getElementById('connectBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        const sendBtn = document.getElementById('sendBtn');
-        const messageInput = document.getElementById('messageInput');
+        const ICON_ARROWS = ['↑', '←', '→', '↩', '✓'];
 
-        const startPeriodicBtn = document.getElementById('startPeriodicBtn');
-        const stopPeriodicBtn = document.getElementById('stopPeriodicBtn');
-        const intervalInput = document.getElementById('intervalInput');
+        // ═══════════════════════════════════════════════════════
+        //  STATE
+        // ═══════════════════════════════════════════════════════
 
-        const statusDiv = document.getElementById('status');
-        const logDiv = document.getElementById('log');
-
-        function log(message, type = 'info') {
-            const timestamp = new Date().toLocaleTimeString();
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${type}`;
-            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
-            logDiv.appendChild(entry);
-            logDiv.scrollTop = logDiv.scrollHeight;
-        }
-
-        function updateStatus(connected) {
-            if (connected) {
-                statusDiv.className = 'status connected';
-                statusDiv.textContent = '✅ Connected to ESP32';
-                connectBtn.disabled = true;
-                disconnectBtn.disabled = false;
-                sendBtn.disabled = false;
-                messageInput.disabled = false;
-
-                startPeriodicBtn.disabled = false;
-                intervalInput.disabled = false;
-                stopPeriodicBtn.disabled = true;
-            } else {
-                statusDiv.className = 'status disconnected';
-                statusDiv.textContent = '❌ Disconnected';
-                connectBtn.disabled = false;
-                disconnectBtn.disabled = true;
-                sendBtn.disabled = true;
-                messageInput.disabled = true;
-
-                stopPeriodicSend(); // Ensure timer stops on disconnect
-                startPeriodicBtn.disabled = true;
-                stopPeriodicBtn.disabled = true;
-                intervalInput.disabled = true;
-            }
-        }
-
-        async function connect() {
-            try {
-                // Check if Web Bluetooth is available
-                if (!navigator.bluetooth) {
-                    log('❌ Web Bluetooth API is not available!', 'info');
-                    log('⚠️ Ensure you are using HTTPS or Bluefy browser', 'info');
-                    alert('Web Bluetooth not available. Please use:\n1. Bluefy browser on iOS\n2. Chrome on Android\n3. HTTPS website (not HTTP)');
-                    return;
-                }
-
-                // ---------------------------------------------------------
-                // 1. AUTO-START BACKGROUND AUDIO (User Gesture: Click)
-                // ---------------------------------------------------------
-                // DO NOT AWAIT. Fire and forget.
-                silentAudio.play()
-                    .then(() => {
-                        log('🎵 Background audio started', 'info');
-
-                        // Register Media Session (Critical for iOS Now Playing)
-                        if ('mediaSession' in navigator) {
-                            navigator.mediaSession.metadata = new MediaMetadata({
-                                title: 'Active Connection',
-                                artist: 'ESP32 Controller',
-                                album: 'Background Mode',
-                                artwork: [{ src: 'https://via.placeholder.com/96', sizes: '96x96', type: 'image/png' }]
-                            });
-                            navigator.mediaSession.setActionHandler('play', () => silentAudio.play());
-                            navigator.mediaSession.setActionHandler('pause', () => silentAudio.play()); // Force resume
-                            log('✅ MediaSession registered', 'info');
-                        }
-                    })
-                    .catch(e => log(`❌ Audio auto-start failed: ${e.message}`, 'info'));
-
-                // Setup listener to ensure it keeps playing if paused
-                silentAudio.onpause = () => {
-                    log('⚠️ Audio paused! Attempting resume...', 'info');
-                    silentAudio.play().catch(e => log('❌ Resume failed: ' + e.message, 'info'));
-                    document.getElementById('audioStatus').textContent = 'Paused (System)';
-                    document.getElementById('audioStatus').style.color = '#e74c3c';
-                };
-
-                log('Requesting Bluetooth Device...', 'info');
-                log('📱 Please select "ESP32-BLE-Test" from the list', 'info');
-
-                bluetoothDevice = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32-BLE-Test' }],
-                    optionalServices: [SERVICE_UUID]
-                });
-
-                log(`✓ Selected device: ${bluetoothDevice.name}`, 'info');
-
-                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-                // 2. BLUEFY HELPERS (Keep these for extra robustness)
-                if (navigator.bluetooth.addEventListener) {
-                    navigator.bluetooth.addEventListener('backgroundstatechanged', (event) => {
-                        log(`📱 App Background State: ${event.inBackground ? 'BACKGROUND 🌙' : 'FOREGROUND ☀️'}`, 'info');
-                    });
-                }
-                if (navigator.bluetooth.setScreenDimEnabled) {
-                    try {
-                        navigator.bluetooth.setScreenDimEnabled(false);
-                        log('✅ Screen dimming disabled (Helper)', 'info');
-                    } catch (e) { }
-                }
-
-                log('Connecting to GATT Server...', 'info');
-                gattServer = await bluetoothDevice.gatt.connect();
-
-                log('Getting Primary Service...', 'info');
-                const service = await gattServer.getPrimaryService(SERVICE_UUID);
-
-                log('Getting TX Characteristic...', 'info');
-                txCharacteristic = await service.getCharacteristic(TX_CHARACTERISTIC_UUID);
-
-                log('Getting RX Characteristic...', 'info');
-                rxCharacteristic = await service.getCharacteristic(RX_CHARACTERISTIC_UUID);
-
-                // Start notifications from ESP32
-                log('Starting notifications...', 'info');
-                await txCharacteristic.startNotifications();
-                txCharacteristic.addEventListener('characteristicvaluechanged', handleNotification);
-
-                log('✅ Successfully connected and ready!', 'info');
-                updateStatus(true);
-
-            } catch (error) {
-                log(`❌ Error: ${error.message || error}`, 'info');
-                if (error.message && error.message.includes('User cancelled')) {
-                    log('ℹ️ Connection cancelled by user', 'info');
-                } else if (!error.message) {
-                    log('⚠️ Unknown error - check console for details', 'info');
-                    console.error('Bluetooth error:', error);
-                }
-                updateStatus(false);
-                silentAudio.pause(); // Stop audio if connection failed
-            }
-        }
-
-        function handleNotification(event) {
-            const value = new TextDecoder().decode(event.target.value);
-            receivedCount++;
-            document.getElementById('receivedCount').textContent = receivedCount;
-            log(`📥 ${value}`, 'received');
-        }
-
-        async function disconnect() {
-            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-                await bluetoothDevice.gatt.disconnect();
-                log('Disconnected from device', 'info');
-            }
-            silentAudio.pause();
-            log('⏹️ Audio stopped', 'info');
-        }
-
-        function onDisconnected(event) {
-            log('Device disconnected', 'info');
-            updateStatus(false);
-            txCharacteristic = null;
-            rxCharacteristic = null;
-        }
-
-        async function sendMessage() {
-            const message = messageInput.value;
-            if (!message) {
-                alert('Please enter a message');
-                return;
-            }
-            await sendData(message);
-            messageInput.value = '';
-        }
-
+        let bleDevice = null, bleChar = null, bleConnected = false;
+        let map, userMarker, gpsWatchId = null;
+        let currentPos = null;
+        let routeGeometry = null, routeSteps = null;
+        let navigating = false, navTimer = null;
+        let destCoords = null;
+        let lastSendTime = 0;
         let isWriting = false;
 
-        async function sendData(message) {
-            if (isWriting) {
-                // log('⚠️ Write skipped: Previous write in progress', 'info');
+        // Background audio keep-alive
+        let silentAudio = new Audio();
+        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
+        silentAudio.loop = true;
+
+        // ═══════════════════════════════════════════════════════
+        //  DOM
+        // ═══════════════════════════════════════════════════════
+
+        const $ = id => document.getElementById(id);
+        const bleIndicator = $('bleIndicator');
+        const statusText = $('statusText');
+        const connectBtn = $('connectBtn');
+        const navBtn = $('navBtn');
+        const stopBtn = $('stopBtn');
+        const navInfo = $('navInfo');
+        const navIcon = $('navIcon');
+        const navStreet = $('navStreet');
+        const navDist = $('navDist');
+        const navUnit = $('navUnit');
+        const logPanel = $('logPanel');
+        const logToggle = $('logToggle');
+
+        // ═══════════════════════════════════════════════════════
+        //  LOG
+        // ═══════════════════════════════════════════════════════
+
+        function log(msg, type = '') {
+            const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const el = document.createElement('div');
+            el.className = 'log-entry ' + type;
+            el.textContent = `[${ts}] ${msg}`;
+            logPanel.appendChild(el);
+            logPanel.scrollTop = logPanel.scrollHeight;
+            // keep max 100 entries
+            while (logPanel.children.length > 100) logPanel.removeChild(logPanel.firstChild);
+        }
+
+        logToggle.onclick = () => {
+            logPanel.classList.toggle('open');
+            logToggle.textContent = logPanel.classList.contains('open') ? '▲ Hide Log' : '▼ Show Log';
+        };
+
+        // ═══════════════════════════════════════════════════════
+        //  BLE  — Web Bluetooth
+        // ═══════════════════════════════════════════════════════
+
+        async function bleConnect() {
+            if (!navigator.bluetooth) {
+                alert('Web Bluetooth not available.\nUse Bluefy on iOS or Chrome on Android with HTTPS.');
                 return;
             }
+
+            try {
+                // Start background audio (needs user gesture)
+                silentAudio.play().then(() => {
+                    log('🎵 Background audio started');
+                    if ('mediaSession' in navigator) {
+                        navigator.mediaSession.metadata = new MediaMetadata({
+                            title: 'MotoHUD Active', artist: 'Navigation', album: 'Background Mode',
+                        });
+                        navigator.mediaSession.setActionHandler('play', () => silentAudio.play());
+                        navigator.mediaSession.setActionHandler('pause', () => silentAudio.play());
+                    }
+                }).catch(e => log('Audio: ' + e.message, 'err'));
+
+                silentAudio.onpause = () => {
+                    silentAudio.play().catch(() => { });
+                };
+
+                statusText.textContent = 'Scanning for MotoHUD…';
+                log('Requesting BLE device…');
+
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: BLE_DEVICE_NAME }],
+                    optionalServices: [BLE_SERVICE_UUID]
+                });
+
+                bleDevice.addEventListener('gattserverdisconnected', onBleDisconnect);
+
+                // Bluefy helpers
+                if (navigator.bluetooth.setScreenDimEnabled) {
+                    try { navigator.bluetooth.setScreenDimEnabled(false); } catch (_) { }
+                }
+
+                statusText.textContent = 'Connecting…';
+                const server = await bleDevice.gatt.connect();
+                const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+                bleChar = await service.getCharacteristic(BLE_NAV_CHAR_UUID);
+
+                bleConnected = true;
+                bleIndicator.classList.add('connected');
+                statusText.textContent = 'Connected to MotoHUD';
+                connectBtn.textContent = '🔵 Connected';
+                connectBtn.disabled = true;
+                $('navRow').style.display = 'block';
+
+                log('✅ BLE connected');
+
+            } catch (e) {
+                log('BLE error: ' + (e.message || e), 'err');
+                statusText.textContent = 'Connection failed — tap to retry';
+                silentAudio.pause();
+            }
+        }
+
+        function onBleDisconnect() {
+            bleConnected = false;
+            bleChar = null;
+            bleIndicator.classList.remove('connected');
+            statusText.textContent = 'Disconnected — tap Connect';
+            connectBtn.textContent = '🔵 Connect to MotoHUD';
+            connectBtn.disabled = false;
+            log('❌ BLE disconnected');
+            if (navigating) stopNavigation();
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  BLE — NavPacket sender
+        //  Struct: { uint8 icon_id, uint32 dist_meters (LE), char[16] street }
+        // ═══════════════════════════════════════════════════════
+
+        async function sendNavPacket(iconId, distMeters, street) {
+            if (!bleChar || !bleConnected || isWriting) return;
+
+            const now = Date.now();
+            if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
+            lastSendTime = now;
 
             isWriting = true;
             try {
-                const encoder = new TextEncoder();
-                const data = encoder.encode(message);
-                await rxCharacteristic.writeValue(data);
+                const buf = new ArrayBuffer(21);
+                const dv = new DataView(buf);
+                dv.setUint8(0, iconId);
+                dv.setUint32(1, Math.round(distMeters), true); // little-endian
 
-                sentCount++;
-                document.getElementById('sentCount').textContent = sentCount;
+                // Write street name (max 16 chars, null-padded)
+                const streetBytes = new TextEncoder().encode((street || '').substring(0, 16));
+                const u8 = new Uint8Array(buf);
+                u8.set(streetBytes, 5);
 
-                // Log only occasionally to prevent spamming the UI log
-                if (!periodicTimer || periodicCount % 5 === 0) {
-                    log(`📤 Sent: ${message}`, 'sent');
-                }
-
-            } catch (error) {
-                log(`❌ Send error: ${error.message}`, 'info');
-                // If periodic sending is active, stop it on error
-                if (periodicTimer) stopPeriodicSend();
+                await bleChar.writeValueWithoutResponse(buf);
+            } catch (e) {
+                log('Send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
             }
         }
 
-        function startPeriodicSend() {
-            const interval = parseInt(intervalInput.value) || 1000;
-            if (interval < 50) {
-                alert('Interval must be at least 50ms');
+        // ═══════════════════════════════════════════════════════
+        //  MAP — Mapbox GL JS (deferred until token is set)
+        // ═══════════════════════════════════════════════════════
+
+        function initMap() {
+            mapboxgl.accessToken = MAPBOX_TOKEN;
+
+            map = new mapboxgl.Map({
+                container: 'map',
+                style: 'mapbox://styles/mapbox/dark-v11',
+                center: [100.5018, 13.7563],
+                zoom: 13,
+                attributionControl: false
+            });
+
+            const geocoder = new MapboxGeocoder({
+                accessToken: MAPBOX_TOKEN,
+                mapboxgl: mapboxgl,
+                placeholder: 'Where to?',
+                marker: false,
+                flyTo: { speed: 2 }
+            });
+            $('geocoder').appendChild(geocoder.onAdd(map));
+
+            geocoder.on('result', (e) => {
+                destCoords = e.result.center;
+                navBtn.disabled = false;
+                log('📍 Destination: ' + e.result.place_name);
+
+                if (window._destMarker) window._destMarker.remove();
+                window._destMarker = new mapboxgl.Marker({ color: '#ff4466' })
+                    .setLngLat(destCoords)
+                    .addTo(map);
+            });
+
+            map.addControl(new mapboxgl.GeolocateControl({
+                positionOptions: { enableHighAccuracy: true },
+                trackUserLocation: true,
+                showUserHeading: true
+            }), 'top-right');
+
+            map.on('load', () => {
+                log('🗺️ Map loaded');
+                startGpsWatch();
+            });
+
+            log('Map initialized with token');
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  GPS
+        // ═══════════════════════════════════════════════════════
+
+        function startGpsWatch() {
+            if (!navigator.geolocation) { log('No GPS', 'err'); return; }
+            gpsWatchId = navigator.geolocation.watchPosition(
+                (pos) => {
+                    currentPos = [pos.coords.longitude, pos.coords.latitude];
+                    if (navigating) onGpsUpdate();
+                },
+                (err) => log('GPS error: ' + err.message, 'err'),
+                { enableHighAccuracy: true, maximumAge: 2000 }
+            );
+            log('📡 GPS watch started');
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  NAVIGATION ENGINE
+        // ═══════════════════════════════════════════════════════
+
+        async function startNavigation() {
+            if (!currentPos) {
+                alert('Waiting for GPS fix…');
+                return;
+            }
+            if (!destCoords) {
+                alert('Please select a destination first');
                 return;
             }
 
-            log(`🔄 Starting periodic send every ${interval}ms`, 'info');
-            startPeriodicBtn.disabled = true;
-            stopPeriodicBtn.disabled = false;
-            intervalInput.disabled = true;
-            periodicCount = 0;
+            log('🧭 Fetching route…');
+            statusText.textContent = 'Calculating route…';
 
-            periodicTimer = setInterval(() => {
-                if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-                    periodicCount++;
-                    sendData(`Ping ${periodicCount}`);
-                } else {
-                    stopPeriodicSend();
+            try {
+                const url = `https://api.mapbox.com/directions/v5/mapbox/driving/` +
+                    `${currentPos[0]},${currentPos[1]};${destCoords[0]},${destCoords[1]}` +
+                    `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (!data.routes || !data.routes.length) {
+                    log('No route found', 'err');
+                    alert('No route found');
+                    return;
                 }
-            }, interval);
+
+                const route = data.routes[0];
+                routeGeometry = route.geometry;
+                routeSteps = [];
+
+                // Flatten steps from all legs
+                for (const leg of route.legs) {
+                    for (const step of leg.steps) {
+                        routeSteps.push({
+                            maneuver: step.maneuver,
+                            name: step.name || '',
+                            distance: step.distance,
+                            location: step.maneuver.location  // [lng, lat] of the maneuver
+                        });
+                    }
+                }
+
+                log(`Route: ${routeSteps.length} steps, ${(route.distance / 1000).toFixed(1)} km`);
+
+                // Draw route on map
+                drawRoute(routeGeometry);
+
+                // Start nav mode
+                navigating = true;
+                navInfo.classList.add('active');
+                navBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+                $('destSection').style.display = 'none';
+                statusText.textContent = 'Navigating…';
+
+                // Initial update
+                onGpsUpdate();
+
+            } catch (e) {
+                log('Route error: ' + e.message, 'err');
+                alert('Failed to get route: ' + e.message);
+            }
         }
 
-        function stopPeriodicSend() {
-            if (periodicTimer) {
-                clearInterval(periodicTimer);
-                periodicTimer = null;
-                log('⏹️ Stopped periodic sending', 'info');
-            }
+        function stopNavigation() {
+            navigating = false;
+            navInfo.classList.remove('active');
+            navBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            $('destSection').style.display = 'block';
+            statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
 
-            // Only re-enable start button if still connected
-            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-                startPeriodicBtn.disabled = false;
-                intervalInput.disabled = false;
-            }
-            stopPeriodicBtn.disabled = true;
+            // Remove route layer
+            if (map.getLayer('route')) map.removeLayer('route');
+            if (map.getSource('route')) map.removeSource('route');
+
+            log('⏹ Navigation stopped');
         }
 
-        connectBtn.addEventListener('click', connect);
-        disconnectBtn.addEventListener('click', disconnect);
-        sendBtn.addEventListener('click', sendMessage);
-        startPeriodicBtn.addEventListener('click', startPeriodicSend);
-        stopPeriodicBtn.addEventListener('click', stopPeriodicSend);
+        function drawRoute(geometry) {
+            if (map.getLayer('route')) map.removeLayer('route');
+            if (map.getSource('route')) map.removeSource('route');
 
-        messageInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendMessage();
+            map.addSource('route', {
+                type: 'geojson',
+                data: { type: 'Feature', geometry: geometry }
+            });
+
+            map.addLayer({
+                id: 'route',
+                type: 'line',
+                source: 'route',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#00c8ff',
+                    'line-width': 5,
+                    'line-opacity': 0.8
+                }
+            }, 'road-label');
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  SNAPPING ENGINE (Turf.js)
+        // ═══════════════════════════════════════════════════════
+
+        function onGpsUpdate() {
+            if (!currentPos || !routeGeometry || !routeSteps || routeSteps.length === 0) return;
+
+            const routeLine = turf.lineString(routeGeometry.coordinates);
+            const pt = turf.point(currentPos);
+
+            // Snap to route
+            const snapped = turf.nearestPointOnLine(routeLine, pt, { units: 'meters' });
+            const snappedDist = snapped.properties.location; // distance along route in meters (approx from index)
+
+            // Find NEXT step: the one whose maneuver point we haven't passed yet
+            let nextStepIdx = 0;
+            let accumDist = 0;
+
+            for (let i = 0; i < routeSteps.length; i++) {
+                const stepPt = turf.point(routeSteps[i].location);
+                const stepDist = turf.distance(pt, stepPt, { units: 'meters' });
+
+                // If we're within 30m of a step, we've reached it — look at the next one
+                if (stepDist < 30 && i < routeSteps.length - 1) {
+                    nextStepIdx = i + 1;
+                    continue;
+                }
+
+                // Find next step that's ahead of us
+                if (i > nextStepIdx) {
+                    // Check if this step's maneuver point is ahead on the route
+                    const maneuverPt = turf.point(routeSteps[i].location);
+                    const distToManeuver = turf.distance(pt, maneuverPt, { units: 'meters' });
+
+                    if (distToManeuver > 20) {
+                        nextStepIdx = i;
+                        break;
+                    }
+                }
             }
-        });
 
-        // Detect visibility changes (important for background testing)
+            const nextStep = routeSteps[nextStepIdx];
+            if (!nextStep) return;
+
+            // Distance from current position to next maneuver
+            const maneuverPt = turf.point(nextStep.location);
+            const distToTurn = turf.distance(pt, maneuverPt, { units: 'meters' });
+
+            // Map maneuver type → icon_id
+            const modifier = nextStep.maneuver.modifier || '';
+            const mType = nextStep.maneuver.type || '';
+            let iconId = 0;
+
+            // Try combined type + modifier first
+            const combined = `${mType} ${modifier}`.trim().toLowerCase();
+            if (MANEUVER_MAP[combined] !== undefined) {
+                iconId = MANEUVER_MAP[combined];
+            } else if (MANEUVER_MAP[mType] !== undefined) {
+                iconId = MANEUVER_MAP[mType];
+            } else if (modifier.includes('right')) {
+                iconId = 2;
+            } else if (modifier.includes('left')) {
+                iconId = 1;
+            } else if (modifier.includes('uturn')) {
+                iconId = 3;
+            }
+
+            // Check for arrival
+            if (mType === 'arrive' || nextStepIdx === routeSteps.length - 1 && distToTurn < 50) {
+                iconId = 4;
+            }
+
+            const streetName = nextStep.name || nextStep.maneuver.instruction?.substring(0, 16) || '';
+
+            // Update web UI
+            navIcon.textContent = ICON_ARROWS[iconId] || '↑';
+            navStreet.textContent = streetName || '—';
+            if (distToTurn >= 1000) {
+                navDist.textContent = (distToTurn / 1000).toFixed(1);
+                navUnit.textContent = 'km';
+            } else {
+                navDist.textContent = Math.round(distToTurn);
+                navUnit.textContent = 'm';
+            }
+
+            // Send to ESP32
+            sendNavPacket(iconId, distToTurn, streetName);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  TOKEN FLOW
+        // ═══════════════════════════════════════════════════════
+
+        const tokenOverlay = $('tokenOverlay');
+        const tokenInput = $('tokenInput');
+        const tokenBtn = $('tokenBtn');
+
+        function applyToken() {
+            const t = tokenInput.value.trim();
+            if (!t || !t.startsWith('pk.')) {
+                alert('Please enter a valid Mapbox token (starts with pk.)');
+                return;
+            }
+            MAPBOX_TOKEN = t;
+            localStorage.setItem('mapbox_token', t);
+            tokenOverlay.classList.add('hidden');
+            initMap();
+        }
+
+        tokenBtn.addEventListener('click', applyToken);
+        tokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyToken(); });
+
+        // Auto-init if token already saved
+        if (MAPBOX_TOKEN && MAPBOX_TOKEN.startsWith('pk.')) {
+            tokenOverlay.classList.add('hidden');
+            initMap();
+        } else {
+            tokenInput.focus();
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  EVENT LISTENERS
+        // ═══════════════════════════════════════════════════════
+
+        connectBtn.addEventListener('click', bleConnect);
+        navBtn.addEventListener('click', startNavigation);
+        stopBtn.addEventListener('click', stopNavigation);
+
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                log('⚠️ Page hidden (screen locked or app backgrounded)', 'info');
+                log('📱 App backgrounded');
             } else {
-                log('👁️ Page visible again', 'info');
+                log('📱 App foregrounded');
             }
         });
 
-        // Check Web Bluetooth support on page load
         window.addEventListener('load', () => {
-            log('🌐 Page loaded', 'info');
-
-            // Check if running on HTTPS or localhost
-            const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-
             if (!navigator.bluetooth) {
-                log('❌ Web Bluetooth API NOT available', 'info');
-                log('⚠️ Use Bluefy on iOS or Chrome on Android', 'info');
-                if (!isSecure) {
-                    log('⚠️ Site must use HTTPS for Web Bluetooth', 'info');
-                }
+                log('⚠️ Web Bluetooth not available — use Bluefy or Chrome HTTPS', 'err');
             } else {
-                log('✅ Web Bluetooth API available', 'info');
-                log('📱 Ready to connect to ESP32', 'info');
-
-                // Check for Bluefy specific extensions availability
-                if (navigator.bluetooth.setScreenDimEnabled) {
-                    log('✅ Bluefy: Screen Dim Control API available', 'info');
-                }
-                if (navigator.bluetooth.addEventListener) {
-                    log('✅ Bluefy: Background Event API available', 'info');
-                }
-            }
-
-            if (!isSecure) {
-                log('⚠️ Not using HTTPS - may have issues', 'info');
+                log('✅ Web Bluetooth ready');
             }
         });
     </script>
