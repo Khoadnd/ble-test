@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Bluefy Background Ping Test</h2>
+  <button onclick="connectBLE()">Connect to ESP32</button>
+  <div id="log"></div>
+
+  <script>
+    async function connectBLE() {
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'ESP32_Ping_Test' }],
+          optionalServices: ['4fafc201-1fb5-459e-8fcc-c5c9c331914b']
+        });
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
+        const char = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
+
+        await char.startNotifications();
+        char.addEventListener('characteristicvaluechanged', (event) => {
+          let value = new TextDecoder().decode(event.target.value);
+          document.getElementById('log').innerHTML += `<p>Received: ${value} at ${new Date().toLocaleTimeString()}</p>`;
+          
+          // Vibrate to "feel" the ping while the phone is locked
+          if (navigator.vibrate) navigator.vibrate(200);
+        });
+
+        document.getElementById('log').innerText = "Connected! You can lock your phone now.";
+      } catch (error) {
+        console.log(error);
+      }
+    }
+  </script>
+</body>
+</html>
