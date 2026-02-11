@@ -135,7 +135,8 @@
 
     async function sendToESP32() {
       if (!characteristic) {
-        log('❌ Not connected');
+        log('❌ Not connected - characteristic is null');
+        alert('Not connected! Please connect first.');
         return;
       }
       
@@ -144,12 +145,19 @@
         const encoder = new TextEncoder();
         const data = encoder.encode(message);
         
-        log(`➡️ Sending: "${message}"`);
+        log(`➡️ Sending: "${message}" (${data.length} bytes)`);
+        log(`🔍 Characteristic: ${characteristic ? 'exists' : 'null'}`);
+        log(`🔍 writeValue method: ${typeof characteristic.writeValue}`);
+        
+        if (!characteristic.writeValue) {
+          throw new Error('writeValue not supported');
+        }
+        
         await characteristic.writeValue(data);
         log('✅ Sent successfully');
       } catch (error) {
-        log(`❌ Send error: ${error.message}`);
-        console.error(error);
+        log(`❌ Send error: ${error.message || error}`);
+        alert(`Send failed: ${error.message || error}`);
       }
     }
 
@@ -179,31 +187,34 @@
         
         log('🔍 Getting characteristic...');
         characteristic = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
-        log(`✅ Characteristic properties: ${JSON.stringify(characteristic.properties)}`);
+        
+        const props = characteristic.properties;
+        log(`✅ Characteristic found!`);
+        log(`📋 Properties: notify=${props.notify}, read=${props.read}, write=${props.write}, writeWithoutResponse=${props.writeWithoutResponse}`);
         
         log('🔔 Enabling notifications...');
         
         // Add event listener BEFORE starting notifications
         characteristic.addEventListener('characteristicvaluechanged', (event) => {
-          console.log('🔔 RAW Notification event:', event);
-          console.log('🔔 Event target:', event.target);
-          console.log('🔔 Event target value:', event.target.value);
+          const timestamp = new Date().toLocaleTimeString();
           
           try {
             const value = new TextDecoder().decode(event.target.value);
             pingCount++;
             
-            console.log(`🔔 Decoded value: "${value}", Count: ${pingCount}`);
-            log(`📨 ${value} (Ping #${pingCount})`, true);
+            log(`📨 [${timestamp}] ${value} (Ping #${pingCount})`, true);
             document.getElementById('pingCount').textContent = pingCount;
+            
+            // Force UI update
+            document.getElementById('pingCount').style.color = pingCount % 2 === 0 ? '#007AFF' : '#34C759';
           } catch (e) {
-            console.error('Decode error:', e);
-            log(`❌ Decode error: ${e.message}`);
+            log(`❌ Decode error: ${e.message || e}`);
+            alert(`Decode error: ${e.message || e}`);
           }
         });
         
         await characteristic.startNotifications();
-        log('✅ Notifications enabled');
+        log('✅ Notifications enabled successfully');
         
         // Enable send button
         document.getElementById('sendBtn').disabled = false;
