@@ -216,9 +216,9 @@
         </div>
 
         <div class="warning">
-            <strong>📱 Bluefy Auto-Background Mode:</strong>
-            Background mode is automatically managed by Bluefy APIs. The app will prevent screen dimming and keep
-            running when backgrounded.
+            <strong>🎵 Auto-Background Mode:</strong>
+            Audio will start automatically when connected. This keeps the app running in the background. Please check
+            the "Now Playing" controls in your Control Center.
         </div>
 
         <button id="connectBtn" class="btn-connect">Connect to ESP32</button>
@@ -276,6 +276,12 @@
         let receivedCount = 0;
         let periodicTimer = null;
         let periodicCount = 0;
+
+        // Persistent Audio Object
+        let silentAudio = new Audio();
+        // 1 second of silent MP3 (Base64)
+        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
+        silentAudio.loop = true;
 
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
@@ -335,6 +341,24 @@
                     return;
                 }
 
+                // ---------------------------------------------------------
+                // 1. AUTO-START BACKGROUND AUDIO (User Gesture: Click)
+                // ---------------------------------------------------------
+                try {
+                    await silentAudio.play();
+                    log('🎵 Background audio started (Looping)', 'info');
+
+                    // Setup listeners to ensure it keeps playing
+                    silentAudio.addEventListener('pause', () => {
+                        log('⚠️ Audio paused! Attempting resume...', 'info');
+                        silentAudio.play().catch(e => log('❌ Resume failed: ' + e.message, 'info'));
+                    });
+
+                } catch (audioErr) {
+                    log(`❌ Audio auto-start failed: ${audioErr.message}`, 'info');
+                    alert('Please tap the screen to enable background audio.');
+                }
+
                 log('Requesting Bluetooth Device...', 'info');
                 log('📱 Please select "ESP32-BLE-Test" from the list', 'info');
 
@@ -347,25 +371,17 @@
 
                 bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
-                // Bluefy Specific: Monitor background state changes
+                // 2. BLUEFY HELPERS (Keep these for extra robustness)
                 if (navigator.bluetooth.addEventListener) {
                     navigator.bluetooth.addEventListener('backgroundstatechanged', (event) => {
                         log(`📱 App Background State: ${event.inBackground ? 'BACKGROUND 🌙' : 'FOREGROUND ☀️'}`, 'info');
-
-                        // Ensure periodic timer logic is robust here if needed
-                        // For now we just log it, as the system should keep running
                     });
-                    log('✅ Bluefy background listener registered', 'info');
                 }
-
-                // Bluefy Specific: Prevent screen dimming to keep app active
                 if (navigator.bluetooth.setScreenDimEnabled) {
                     try {
                         navigator.bluetooth.setScreenDimEnabled(false);
-                        log('✅ Screen dimming disabled (Keep Awake)', 'info');
-                    } catch (e) {
-                        log(`⚠️ Could not disable screen dimming: ${e.message}`, 'info');
-                    }
+                        log('✅ Screen dimming disabled (Helper)', 'info');
+                    } catch (e) { }
                 }
 
                 log('Connecting to GATT Server...', 'info');
@@ -397,6 +413,7 @@
                     console.error('Bluetooth error:', error);
                 }
                 updateStatus(false);
+                silentAudio.pause(); // Stop audio if connection failed
             }
         }
 
@@ -412,6 +429,8 @@
                 await bluetoothDevice.gatt.disconnect();
                 log('Disconnected from device', 'info');
             }
+            silentAudio.pause();
+            log('⏹️ Audio stopped', 'info');
         }
 
         function onDisconnected(event) {
