@@ -159,20 +159,25 @@
         characteristic = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
         
         log('🔔 Enabling notifications...');
-        await characteristic.startNotifications();
         
+        // Add event listener BEFORE starting notifications
         characteristic.addEventListener('characteristicvaluechanged', (event) => {
+          console.log('🔔 Notification received!', event);
           const value = new TextDecoder().decode(event.target.value);
           pingCount++;
           
-          log(`📨 ${value}`, true);
+          log(`📨 ${value} (Ping #${pingCount})`, true);
           document.getElementById('pingCount').textContent = pingCount;
         });
+        
+        await characteristic.startNotifications();
+        log('✅ Notifications enabled');
 
         document.getElementById('status').className = 'status connected';
         document.getElementById('status').textContent = '✅ Connected - ESP32 will ping every 5 seconds';
         log('🎉 Ready! Counting pings from ESP32');
         log('💡 Keep this page open to receive pings');
+        log('⏳ Waiting for pings... (every 5 seconds)');
         
       } catch (error) {
         log(`❌ Error: ${error.message}`);
