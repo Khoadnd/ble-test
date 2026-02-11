@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,7 +11,7 @@
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -18,47 +19,47 @@
             padding: 20px;
             color: #333;
         }
-        
+
         .container {
             max-width: 600px;
             margin: 0 auto;
             background: white;
             border-radius: 20px;
             padding: 30px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
-        
+
         h1 {
             color: #667eea;
             margin-bottom: 10px;
             font-size: 28px;
         }
-        
+
         .subtitle {
             color: #888;
             margin-bottom: 30px;
             font-size: 14px;
         }
-        
+
         .status {
             padding: 15px;
             border-radius: 10px;
             margin-bottom: 20px;
             font-weight: 500;
         }
-        
+
         .status.disconnected {
             background: #fee;
             color: #c33;
             border: 2px solid #fcc;
         }
-        
+
         .status.connected {
             background: #efe;
             color: #3c3;
             border: 2px solid #cfc;
         }
-        
+
         button {
             width: 100%;
             padding: 15px;
@@ -70,40 +71,40 @@
             cursor: pointer;
             transition: all 0.3s ease;
         }
-        
+
         button:active {
             transform: scale(0.98);
         }
-        
+
         .btn-connect {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
-        
+
         .btn-connect:hover {
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
-        
+
         .btn-disconnect {
             background: #e74c3c;
             color: white;
         }
-        
+
         .btn-send {
             background: #2ecc71;
             color: white;
         }
-        
+
         button:disabled {
             background: #ccc;
             cursor: not-allowed;
             opacity: 0.6;
         }
-        
+
         .input-group {
             margin: 20px 0;
         }
-        
+
         input[type="text"] {
             width: 100%;
             padding: 12px;
@@ -112,19 +113,19 @@
             font-size: 16px;
             margin-top: 5px;
         }
-        
+
         input[type="text"]:focus {
             outline: none;
             border-color: #667eea;
         }
-        
+
         label {
             font-weight: 600;
             color: #555;
             display: block;
             margin-bottom: 5px;
         }
-        
+
         .log {
             background: #f8f9fa;
             border: 2px solid #e9ecef;
@@ -136,33 +137,33 @@
             font-size: 13px;
             margin-top: 20px;
         }
-        
+
         .log-entry {
             padding: 5px 0;
             border-bottom: 1px solid #e9ecef;
         }
-        
+
         .log-entry:last-child {
             border-bottom: none;
         }
-        
+
         .log-entry.received {
             color: #2ecc71;
         }
-        
+
         .log-entry.sent {
             color: #3498db;
         }
-        
+
         .log-entry.info {
             color: #95a5a6;
         }
-        
+
         .timestamp {
             color: #95a5a6;
             font-size: 11px;
         }
-        
+
         .warning {
             background: #fff3cd;
             border: 2px solid #ffc107;
@@ -171,32 +172,32 @@
             margin: 20px 0;
             color: #856404;
         }
-        
+
         .warning strong {
             display: block;
             margin-bottom: 5px;
         }
-        
+
         .stats {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
             margin: 20px 0;
         }
-        
+
         .stat-box {
             background: #f8f9fa;
             padding: 15px;
             border-radius: 10px;
             text-align: center;
         }
-        
+
         .stat-value {
             font-size: 24px;
             font-weight: bold;
             color: #667eea;
         }
-        
+
         .stat-label {
             font-size: 12px;
             color: #888;
@@ -204,30 +205,41 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>🔵 ESP32 BLE Controller</h1>
         <p class="subtitle">Optimized for Bluefy on iOS</p>
-        
+
         <div id="status" class="status disconnected">
             ❌ Disconnected
         </div>
-        
+
         <div class="warning">
             <strong>📱 iOS Background Mode:</strong>
-            Bluefy may maintain BLE connection when locked, but iOS may suspend JavaScript execution. Test by locking your device and checking if notifications continue to appear when unlocked.
+            Bluefy may maintain BLE connection when locked, but iOS may suspend JavaScript execution. Test by locking
+            your device and checking if notifications continue to appear when unlocked.
         </div>
-        
+
         <button id="connectBtn" class="btn-connect">Connect to ESP32</button>
         <button id="disconnectBtn" class="btn-disconnect" disabled>Disconnect</button>
-        
+
         <div class="input-group">
             <label for="messageInput">Send Message to ESP32:</label>
             <input type="text" id="messageInput" placeholder="Type your message here..." disabled>
         </div>
-        
+
         <button id="sendBtn" class="btn-send" disabled>Send Message</button>
-        
+
+        <div class="input-group" style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+            <label for="intervalInput">Periodic Send Interval (ms):</label>
+            <input type="number" id="intervalInput" value="1000" min="100" placeholder="1000" disabled>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <button id="startPeriodicBtn" class="btn-send" disabled>Start Periodic Loop</button>
+            <button id="stopPeriodicBtn" class="btn-disconnect" disabled>Stop Loop</button>
+        </div>
+
         <div class="stats">
             <div class="stat-box">
                 <div class="stat-value" id="sentCount">0</div>
@@ -238,7 +250,7 @@
                 <div class="stat-label">Messages Received</div>
             </div>
         </div>
-        
+
         <div>
             <label>Activity Log:</label>
             <div id="log" class="log">
@@ -254,22 +266,29 @@
         const SERVICE_UUID = '000000ff-0000-1000-8000-00805f9b34fb';
         const TX_CHARACTERISTIC_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';  // ESP32 sends to web
         const RX_CHARACTERISTIC_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';  // Web sends to ESP32
-        
+
         let bluetoothDevice = null;
         let gattServer = null;
         let txCharacteristic = null;
         let rxCharacteristic = null;
-        
+
         let sentCount = 0;
         let receivedCount = 0;
-        
+        let periodicTimer = null;
+        let periodicCount = 0;
+
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
         const sendBtn = document.getElementById('sendBtn');
         const messageInput = document.getElementById('messageInput');
+
+        const startPeriodicBtn = document.getElementById('startPeriodicBtn');
+        const stopPeriodicBtn = document.getElementById('stopPeriodicBtn');
+        const intervalInput = document.getElementById('intervalInput');
+
         const statusDiv = document.getElementById('status');
         const logDiv = document.getElementById('log');
-        
+
         function log(message, type = 'info') {
             const timestamp = new Date().toLocaleTimeString();
             const entry = document.createElement('div');
@@ -278,7 +297,7 @@
             logDiv.appendChild(entry);
             logDiv.scrollTop = logDiv.scrollHeight;
         }
-        
+
         function updateStatus(connected) {
             if (connected) {
                 statusDiv.className = 'status connected';
@@ -287,6 +306,10 @@
                 disconnectBtn.disabled = false;
                 sendBtn.disabled = false;
                 messageInput.disabled = false;
+
+                startPeriodicBtn.disabled = false;
+                intervalInput.disabled = false;
+                stopPeriodicBtn.disabled = true;
             } else {
                 statusDiv.className = 'status disconnected';
                 statusDiv.textContent = '❌ Disconnected';
@@ -294,9 +317,14 @@
                 disconnectBtn.disabled = true;
                 sendBtn.disabled = true;
                 messageInput.disabled = true;
+
+                stopPeriodicSend(); // Ensure timer stops on disconnect
+                startPeriodicBtn.disabled = true;
+                stopPeriodicBtn.disabled = true;
+                intervalInput.disabled = true;
             }
         }
-        
+
         async function connect() {
             try {
                 // Check if Web Bluetooth is available
@@ -306,40 +334,40 @@
                     alert('Web Bluetooth not available. Please use:\n1. Bluefy browser on iOS\n2. Chrome on Android\n3. HTTPS website (not HTTP)');
                     return;
                 }
-                
+
                 log('Requesting Bluetooth Device...', 'info');
                 log('📱 Please select "ESP32-BLE-Test" from the list', 'info');
-                
+
                 bluetoothDevice = await navigator.bluetooth.requestDevice({
                     filters: [{ name: 'ESP32-BLE-Test' }],
                     optionalServices: [SERVICE_UUID]
                 });
-                
+
                 log(`✓ Selected device: ${bluetoothDevice.name}`, 'info');
-                
+
                 bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
-                
+
                 log('Connecting to GATT Server...', 'info');
                 gattServer = await bluetoothDevice.gatt.connect();
-                
+
                 log('Getting Primary Service...', 'info');
                 const service = await gattServer.getPrimaryService(SERVICE_UUID);
-                
+
                 log('Getting TX Characteristic...', 'info');
                 txCharacteristic = await service.getCharacteristic(TX_CHARACTERISTIC_UUID);
-                
+
                 log('Getting RX Characteristic...', 'info');
                 rxCharacteristic = await service.getCharacteristic(RX_CHARACTERISTIC_UUID);
-                
+
                 // Start notifications from ESP32
                 log('Starting notifications...', 'info');
                 await txCharacteristic.startNotifications();
                 txCharacteristic.addEventListener('characteristicvaluechanged', handleNotification);
-                
+
                 log('✅ Successfully connected and ready!', 'info');
                 updateStatus(true);
-                
-            } catch(error) {
+
+            } catch (error) {
                 log(`❌ Error: ${error.message || error}`, 'info');
                 if (error.message && error.message.includes('User cancelled')) {
                     log('ℹ️ Connection cancelled by user', 'info');
@@ -350,60 +378,107 @@
                 updateStatus(false);
             }
         }
-        
+
         function handleNotification(event) {
             const value = new TextDecoder().decode(event.target.value);
             receivedCount++;
             document.getElementById('receivedCount').textContent = receivedCount;
             log(`📥 ${value}`, 'received');
         }
-        
+
         async function disconnect() {
             if (bluetoothDevice && bluetoothDevice.gatt.connected) {
                 await bluetoothDevice.gatt.disconnect();
                 log('Disconnected from device', 'info');
             }
         }
-        
+
         function onDisconnected(event) {
             log('Device disconnected', 'info');
             updateStatus(false);
             txCharacteristic = null;
             rxCharacteristic = null;
         }
-        
+
         async function sendMessage() {
             const message = messageInput.value;
             if (!message) {
                 alert('Please enter a message');
                 return;
             }
-            
+            await sendData(message);
+            messageInput.value = '';
+        }
+
+        async function sendData(message) {
             try {
                 const encoder = new TextEncoder();
                 const data = encoder.encode(message);
                 await rxCharacteristic.writeValue(data);
-                
+
                 sentCount++;
                 document.getElementById('sentCount').textContent = sentCount;
+                // Only log manual messages or periodic ones if not too fast? 
+                // Let's log all for now as requested.
                 log(`📤 Sent: ${message}`, 'sent');
-                messageInput.value = '';
-                
-            } catch(error) {
+
+            } catch (error) {
                 log(`❌ Send error: ${error.message}`, 'info');
+                // If periodic sending is active, stop it on error
+                if (periodicTimer) stopPeriodicSend();
             }
         }
-        
+
+        function startPeriodicSend() {
+            const interval = parseInt(intervalInput.value) || 1000;
+            if (interval < 50) {
+                alert('Interval must be at least 50ms');
+                return;
+            }
+
+            log(`🔄 Starting periodic send every ${interval}ms`, 'info');
+            startPeriodicBtn.disabled = true;
+            stopPeriodicBtn.disabled = false;
+            intervalInput.disabled = true;
+            periodicCount = 0;
+
+            periodicTimer = setInterval(() => {
+                if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                    periodicCount++;
+                    sendData(`Ping ${periodicCount}`);
+                } else {
+                    stopPeriodicSend();
+                }
+            }, interval);
+        }
+
+        function stopPeriodicSend() {
+            if (periodicTimer) {
+                clearInterval(periodicTimer);
+                periodicTimer = null;
+                log('⏹️ Stopped periodic sending', 'info');
+            }
+
+            // Only re-enable start button if still connected
+            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                startPeriodicBtn.disabled = false;
+                intervalInput.disabled = false;
+            }
+            stopPeriodicBtn.disabled = true;
+        }
+
         connectBtn.addEventListener('click', connect);
         disconnectBtn.addEventListener('click', disconnect);
         sendBtn.addEventListener('click', sendMessage);
-        
+        startPeriodicBtn.addEventListener('click', startPeriodicSend);
+        stopPeriodicBtn.addEventListener('click', stopPeriodicSend);
+
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();
             }
         });
-        
+
         // Detect visibility changes (important for background testing)
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
@@ -412,14 +487,14 @@
                 log('👁️ Page visible again', 'info');
             }
         });
-        
+
         // Check Web Bluetooth support on page load
         window.addEventListener('load', () => {
             log('🌐 Page loaded', 'info');
-            
+
             // Check if running on HTTPS or localhost
             const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-            
+
             if (!navigator.bluetooth) {
                 log('❌ Web Bluetooth API NOT available', 'info');
                 log('⚠️ Use Bluefy on iOS or Chrome on Android', 'info');
@@ -430,11 +505,12 @@
                 log('✅ Web Bluetooth API available', 'info');
                 log('📱 Ready to connect to ESP32', 'info');
             }
-            
+
             if (!isSecure) {
                 log('⚠️ Not using HTTPS - may have issues', 'info');
             }
         });
     </script>
 </body>
+
 </html>
