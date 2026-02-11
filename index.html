@@ -425,7 +425,15 @@
             messageInput.value = '';
         }
 
+        let isWriting = false;
+
         async function sendData(message) {
+            if (isWriting) {
+                // log('⚠️ Write skipped: Previous write in progress', 'info');
+                return;
+            }
+
+            isWriting = true;
             try {
                 const encoder = new TextEncoder();
                 const data = encoder.encode(message);
@@ -443,6 +451,8 @@
                 log(`❌ Send error: ${error.message}`, 'info');
                 // If periodic sending is active, stop it on error
                 if (periodicTimer) stopPeriodicSend();
+            } finally {
+                isWriting = false;
             }
         }
 
