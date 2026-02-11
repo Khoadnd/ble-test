@@ -213,6 +213,9 @@
 
         <div id="status" class="status disconnected">
             ❌ Disconnected
+            <div style="margin-top: 10px; font-size: 13px;">
+                <strong>Audio Status:</strong> <span id="audioStatus" style="color: #e74c3c;">Stopped</span>
+            </div>
         </div>
 
         <div class="warning">
@@ -279,9 +282,19 @@
 
         // Persistent Audio Object
         let silentAudio = new Audio();
-        // 1 second of silent MP3 (Base64)
-        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
+        // 5 seconds of silent MP3 (validated)
+        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
         silentAudio.loop = true;
+        silentAudio.autoplay = true;
+
+        // Debugging Audio
+        silentAudio.addEventListener('timeupdate', () => {
+            if (silentAudio.currentTime > 0 && silentAudio.currentTime < 0.5) {
+                // log('🎵 Audio Loop Restarted', 'info');
+            }
+            document.getElementById('audioStatus').textContent = `Playing (${Math.floor(silentAudio.currentTime)}s)`;
+            document.getElementById('audioStatus').style.color = '#2ecc71';
+        });
 
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
@@ -344,16 +357,32 @@
                 // ---------------------------------------------------------
                 // 1. AUTO-START BACKGROUND AUDIO (User Gesture: Click)
                 // ---------------------------------------------------------
-                // Do NOT await audio play, as it consumes the user gesture context
-                // required for requestDevice on some browsers/versions.
+                // DO NOT AWAIT. Fire and forget.
                 silentAudio.play()
-                    .then(() => log('🎵 Background audio started (Looping)', 'info'))
+                    .then(() => {
+                        log('🎵 Background audio started', 'info');
+
+                        // Register Media Session (Critical for iOS Now Playing)
+                        if ('mediaSession' in navigator) {
+                            navigator.mediaSession.metadata = new MediaMetadata({
+                                title: 'Active Connection',
+                                artist: 'ESP32 Controller',
+                                album: 'Background Mode',
+                                artwork: [{ src: 'https://via.placeholder.com/96', sizes: '96x96', type: 'image/png' }]
+                            });
+                            navigator.mediaSession.setActionHandler('play', () => silentAudio.play());
+                            navigator.mediaSession.setActionHandler('pause', () => silentAudio.play()); // Force resume
+                            log('✅ MediaSession registered', 'info');
+                        }
+                    })
                     .catch(e => log(`❌ Audio auto-start failed: ${e.message}`, 'info'));
 
                 // Setup listener to ensure it keeps playing if paused
                 silentAudio.onpause = () => {
                     log('⚠️ Audio paused! Attempting resume...', 'info');
                     silentAudio.play().catch(e => log('❌ Resume failed: ' + e.message, 'info'));
+                    document.getElementById('audioStatus').textContent = 'Paused (System)';
+                    document.getElementById('audioStatus').style.color = '#e74c3c';
                 };
 
                 log('Requesting Bluetooth Device...', 'info');
