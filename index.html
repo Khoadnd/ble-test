@@ -240,6 +240,18 @@
             <button id="stopPeriodicBtn" class="btn-disconnect" disabled>Stop Loop</button>
         </div>
 
+        <div class="warning" style="margin-top: 20px;">
+            <strong>🧩 Background Tracking:</strong>
+            <button id="bgModeBtn" class="btn-connect" style="margin-top: 10px; background: #f39c12;">Enable Background
+                Mode 🔇</button>
+            <div style="margin-top: 10px; font-size: 14px;">
+                Heading: <span id="headingValue" style="font-weight: bold; font-size: 18px;">---</span>°
+            </div>
+            <p style="font-size: 12px; margin-top: 5px; color: #666;">
+                Requires tapping "Enable" to play silent audio and keep app alive when locked.
+            </p>
+        </div>
+
         <div class="stats">
             <div class="stat-box">
                 <div class="stat-value" id="sentCount">0</div>
@@ -288,6 +300,14 @@
 
         const statusDiv = document.getElementById('status');
         const logDiv = document.getElementById('log');
+
+        let audioContext = null;
+        let silentAudio = null;
+        let isBackgroundEnabled = false;
+        let currentHeading = 0;
+
+        const bgModeBtn = document.getElementById('bgModeBtn');
+        const headingDisplay = document.getElementById('headingValue');
 
         function log(message, type = 'info') {
             const timestamp = new Date().toLocaleTimeString();
@@ -418,9 +438,13 @@
 
                 sentCount++;
                 document.getElementById('sentCount').textContent = sentCount;
+                document.getElementById('sentCount').textContent = sentCount;
                 // Only log manual messages or periodic ones if not too fast? 
                 // Let's log all for now as requested.
-                log(`📤 Sent: ${message}`, 'sent');
+                // log(`📤 Sent: ${message}`, 'sent'); // Commented out to reduce noise
+                if (!periodicTimer || periodicCount % 5 === 0) {
+                    log(`📤 Sent: ${message}`, 'sent');
+                }
 
             } catch (error) {
                 log(`❌ Send error: ${error.message}`, 'info');
@@ -445,11 +469,81 @@
             periodicTimer = setInterval(() => {
                 if (bluetoothDevice && bluetoothDevice.gatt.connected) {
                     periodicCount++;
-                    sendData(`Ping ${periodicCount}`);
+                    // If background mode is on and we have a heading, send that
+                    if (isBackgroundEnabled && currentHeading !== 0) {
+                        sendData(`H: ${currentHeading}`);
+                    } else {
+                        sendData(`Ping ${periodicCount}`);
+                    }
                 } else {
                     stopPeriodicSend();
                 }
             }, interval);
+        }
+
+        async function toggleBackgroundMode() {
+            if (!isBackgroundEnabled) {
+                try {
+                    // Create silent audio element if not exists
+                    if (!silentAudio) {
+                        silentAudio = new Audio();
+                        // 1 second of silent MP3
+                        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
+                        silentAudio.loop = true;
+                    }
+
+                    // Request Device Orientation Permission (iOS 13+)
+                    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                        const response = await DeviceOrientationEvent.requestPermission();
+                        if (response !== 'granted') {
+                            alert('Permission to access orientation was denied');
+                            return;
+                        }
+                    }
+
+                    // Start playing silent audio
+                    await silentAudio.play();
+
+                    // Add orientation listener
+                    window.addEventListener('deviceorientation', handleOrientation);
+
+                    bgModeBtn.textContent = 'Disable Background Mode 🔇';
+                    bgModeBtn.style.background = '#e74c3c';
+                    isBackgroundEnabled = true;
+                    log('✅ Background mode enabled (Audio & Compass)', 'info');
+
+                } catch (e) {
+                    log(`❌ Error enabling bg mode: ${e.message}`, 'info');
+                    alert('Tap anywhere to enable audio for background mode.');
+                }
+            } else {
+                if (silentAudio) {
+                    silentAudio.pause();
+                }
+                window.removeEventListener('deviceorientation', handleOrientation);
+
+                bgModeBtn.textContent = 'Enable Background Mode 🔇';
+                bgModeBtn.style.background = '#f39c12';
+                isBackgroundEnabled = false;
+                log('⏹️ Background mode disabled', 'info');
+                headingDisplay.textContent = '---';
+            }
+        }
+
+        function handleOrientation(event) {
+            // iOS: event.webkitCompassHeading, Android: computed from alpha
+            let heading = 0;
+
+            if (event.webkitCompassHeading) {
+                // iOS
+                heading = event.webkitCompassHeading;
+            } else if (event.alpha !== null) {
+                // Android (absolute) - roughly
+                heading = 360 - event.alpha;
+            }
+
+            currentHeading = Math.round(heading);
+            headingDisplay.textContent = currentHeading;
         }
 
         function stopPeriodicSend() {
@@ -472,6 +566,7 @@
         sendBtn.addEventListener('click', sendMessage);
         startPeriodicBtn.addEventListener('click', startPeriodicSend);
         stopPeriodicBtn.addEventListener('click', stopPeriodicSend);
+        bgModeBtn.addEventListener('click', toggleBackgroundMode);
 
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
