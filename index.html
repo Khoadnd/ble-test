@@ -344,20 +344,17 @@
                 // ---------------------------------------------------------
                 // 1. AUTO-START BACKGROUND AUDIO (User Gesture: Click)
                 // ---------------------------------------------------------
-                try {
-                    await silentAudio.play();
-                    log('🎵 Background audio started (Looping)', 'info');
+                // Do NOT await audio play, as it consumes the user gesture context
+                // required for requestDevice on some browsers/versions.
+                silentAudio.play()
+                    .then(() => log('🎵 Background audio started (Looping)', 'info'))
+                    .catch(e => log(`❌ Audio auto-start failed: ${e.message}`, 'info'));
 
-                    // Setup listeners to ensure it keeps playing
-                    silentAudio.addEventListener('pause', () => {
-                        log('⚠️ Audio paused! Attempting resume...', 'info');
-                        silentAudio.play().catch(e => log('❌ Resume failed: ' + e.message, 'info'));
-                    });
-
-                } catch (audioErr) {
-                    log(`❌ Audio auto-start failed: ${audioErr.message}`, 'info');
-                    alert('Please tap the screen to enable background audio.');
-                }
+                // Setup listener to ensure it keeps playing if paused
+                silentAudio.onpause = () => {
+                    log('⚠️ Audio paused! Attempting resume...', 'info');
+                    silentAudio.play().catch(e => log('❌ Resume failed: ' + e.message, 'info'));
+                };
 
                 log('Requesting Bluetooth Device...', 'info');
                 log('📱 Please select "ESP32-BLE-Test" from the list', 'info');
