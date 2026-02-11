@@ -92,14 +92,10 @@
   </style>
 </head>
 <body>
-  <h1>📳 ESP32 Vibration Test</h1>
+  <h1>� ESP32 Ping Test</h1>
   
   <button class="connect-btn" onclick="connectToESP32()">
     🔵 Connect to ESP32
-  </button>
-  
-  <button class="test-btn" onclick="testVibration()">
-    📳 Test Vibration
   </button>
   
   <div class="status disconnected" id="status">
@@ -132,17 +128,6 @@
       // Keep only last 20 entries
       while (logDiv.children.length > 20) {
         logDiv.removeChild(logDiv.lastChild);
-      }
-    }
-
-    function testVibration() {
-      if ('vibrate' in navigator) {
-        // Pattern: vibrate for 200ms, pause 100ms, vibrate 200ms
-        navigator.vibrate([200, 100, 200]);
-        log('📳 Vibration test executed');
-      } else {
-        log('❌ Vibration not supported on this device');
-        alert('Vibration API not supported on this device');
       }
     }
 
@@ -182,18 +167,12 @@
           
           log(`📨 ${value}`, true);
           document.getElementById('pingCount').textContent = pingCount;
-          
-          // VIBRATE THE PHONE
-          if ('vibrate' in navigator) {
-            navigator.vibrate([200, 100, 200]);
-            log('📳 Phone vibrated!');
-          }
         });
 
         document.getElementById('status').className = 'status connected';
         document.getElementById('status').textContent = '✅ Connected - ESP32 will ping every 5 seconds';
-        log('🎉 Ready! Your phone will vibrate on each ping');
-        log('💡 You can lock your screen now (works on Android)');
+        log('🎉 Ready! Counting pings from ESP32');
+        log('💡 Keep this page open to receive pings');
         
       } catch (error) {
         log(`❌ Error: ${error.message}`);
