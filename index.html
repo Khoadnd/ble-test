@@ -1,277 +1,406 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ESP32 Vibration Test</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-      padding: 20px;
-      max-width: 500px;
-      margin: 0 auto;
-      background: #f5f5f5;
-    }
-    h1 { 
-      color: #333; 
-      font-size: 24px;
-      margin-bottom: 20px;
-    }
-    button {
-      width: 100%;
-      padding: 15px;
-      font-size: 18px;
-      margin: 10px 0;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: bold;
-    }
-    .connect-btn {
-      background: #007AFF;
-      color: white;
-    }
-    .connect-btn:active {
-      background: #0051D5;
-    }
-    .test-btn {
-      background: #34C759;
-      color: white;
-    }
-    .test-btn:active {
-      background: #248A3D;
-    }
-    .status {
-      padding: 15px;
-      margin: 15px 0;
-      border-radius: 8px;
-      font-size: 16px;
-      text-align: center;
-      font-weight: bold;
-    }
-    .disconnected {
-      background: #FF3B30;
-      color: white;
-    }
-    .connected {
-      background: #34C759;
-      color: white;
-    }
-    #log {
-      background: white;
-      border-radius: 8px;
-      padding: 15px;
-      margin-top: 20px;
-      max-height: 300px;
-      overflow-y: auto;
-      font-size: 14px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    .log-entry {
-      padding: 8px 0;
-      border-bottom: 1px solid #eee;
-    }
-    .log-entry:last-child {
-      border-bottom: none;
-    }
-    .timestamp {
-      color: #666;
-      font-size: 12px;
-    }
-    .message {
-      color: #007AFF;
-      font-weight: bold;
-    }
-    .ping-count {
-      font-size: 48px;
-      text-align: center;
-      color: #007AFF;
-      font-weight: bold;
-      margin: 20px 0;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 BLE Controller - Bluefy Compatible</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+            border: 2px solid #fcc;
+        }
+        
+        .status.connected {
+            background: #efe;
+            color: #3c3;
+            border: 2px solid #cfc;
+        }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .btn-connect {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-connect:hover {
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-disconnect {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-send {
+            background: #2ecc71;
+            color: white;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .input-group {
+            margin: 20px 0;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+            margin-top: 5px;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        label {
+            font-weight: 600;
+            color: #555;
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .log {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        .log-entry.received {
+            color: #2ecc71;
+        }
+        
+        .log-entry.sent {
+            color: #3498db;
+        }
+        
+        .log-entry.info {
+            color: #95a5a6;
+        }
+        
+        .timestamp {
+            color: #95a5a6;
+            font-size: 11px;
+        }
+        
+        .warning {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #856404;
+        }
+        
+        .warning strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .stat-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+    </style>
 </head>
 <body>
-  <h1>� ESP32 Ping Test</h1>
-  
-  <button class="connect-btn" onclick="connectToESP32()">
-    🔵 Connect to ESP32
-  </button>
-    <button class="test-btn" onclick="sendToESP32()" id="sendBtn" disabled>
-    ➡️ Send to ESP32
-  </button>
-    <div class="status disconnected" id="status">
-    ❌ Not Connected
-  </div>
-
-  <div class="ping-count" id="pingCount">0</div>
-  <div style="text-align: center; color: #666; margin-top: -10px;">pings received</div>
-
-  <div id="log"></div>
-
-  <script>
-    let device = null;
-    let characteristic = null;
-    let pingCount = 0;
-
-    function log(message, isMessage = false) {
-      const timestamp = new Date().toLocaleTimeString();
-      console.log(`[${timestamp}] ${message}`);
-      
-      const logDiv = document.getElementById('log');
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      entry.innerHTML = `
-        <div class="timestamp">${timestamp}</div>
-        <div class="${isMessage ? 'message' : ''}">${message}</div>
-      `;
-      logDiv.insertBefore(entry, logDiv.firstChild);
-      
-      // Keep only last 20 entries
-      while (logDiv.children.length > 20) {
-        logDiv.removeChild(logDiv.lastChild);
-      }
-    }
-
-    async function sendToESP32() {
-      if (!characteristic) {
-        log('❌ Not connected - characteristic is null');
-        alert('Not connected! Please connect first.');
-        return;
-      }
-      
-      try {
-        const message = "Hello from Browser!";
-        const encoder = new TextEncoder();
-        const data = encoder.encode(message);
+    <div class="container">
+        <h1>🔵 ESP32 BLE Controller</h1>
+        <p class="subtitle">Optimized for Bluefy on iOS</p>
         
-        log(`➡️ Sending: "${message}" (${data.length} bytes)`);
-        log(`🔍 Characteristic: ${characteristic ? 'exists' : 'null'}`);
-        log(`🔍 writeValue method: ${typeof characteristic.writeValue}`);
+        <div id="status" class="status disconnected">
+            ❌ Disconnected
+        </div>
         
-        if (!characteristic.writeValue) {
-          throw new Error('writeValue not supported');
+        <div class="warning">
+            <strong>📱 iOS Background Mode:</strong>
+            Bluefy may maintain BLE connection when locked, but iOS may suspend JavaScript execution. Test by locking your device and checking if notifications continue to appear when unlocked.
+        </div>
+        
+        <button id="connectBtn" class="btn-connect">Connect to ESP32</button>
+        <button id="disconnectBtn" class="btn-disconnect" disabled>Disconnect</button>
+        
+        <div class="input-group">
+            <label for="messageInput">Send Message to ESP32:</label>
+            <input type="text" id="messageInput" placeholder="Type your message here..." disabled>
+        </div>
+        
+        <button id="sendBtn" class="btn-send" disabled>Send Message</button>
+        
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-value" id="sentCount">0</div>
+                <div class="stat-label">Messages Sent</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="receivedCount">0</div>
+                <div class="stat-label">Messages Received</div>
+            </div>
+        </div>
+        
+        <div>
+            <label>Activity Log:</label>
+            <div id="log" class="log">
+                <div class="log-entry info">
+                    <span class="timestamp">[Ready]</span> Click "Connect to ESP32" to start
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = 0x00FF;
+        const TX_CHARACTERISTIC_UUID = 0xFF01;  // ESP32 sends to web
+        const RX_CHARACTERISTIC_UUID = 0xFF02;  // Web sends to ESP32
+        
+        let bluetoothDevice = null;
+        let gattServer = null;
+        let txCharacteristic = null;
+        let rxCharacteristic = null;
+        
+        let sentCount = 0;
+        let receivedCount = 0;
+        
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const messageInput = document.getElementById('messageInput');
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
         }
         
-        await characteristic.writeValue(data);
-        log('✅ Sent successfully');
-      } catch (error) {
-        log(`❌ Send error: ${error.message || error}`);
-        alert(`Send failed: ${error.message || error}`);
-      }
-    }
-
-    async function connectToESP32() {
-      try {
-        log('🔍 Searching for ESP32_Ping_Test...');
+        function updateStatus(connected) {
+            if (connected) {
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = '✅ Connected to ESP32';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                sendBtn.disabled = false;
+                messageInput.disabled = false;
+            } else {
+                statusDiv.className = 'status disconnected';
+                statusDiv.textContent = '❌ Disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                sendBtn.disabled = true;
+                messageInput.disabled = true;
+            }
+        }
         
-        device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'ESP32_Ping_Test' }],
-          optionalServices: ['4fafc201-1fb5-459e-8fcc-c5c9c331914b']
-        });
-
-        log(`✅ Found: ${device.name}`);
-        
-        // Handle disconnection
-        device.addEventListener('gattserverdisconnected', () => {
-          log('⚠️ ESP32 disconnected');
-          document.getElementById('status').className = 'status disconnected';
-          document.getElementById('status').textContent = '❌ Disconnected';
-        });
-        
-        log('🔗 Connecting to GATT server...');
-        const server = await device.gatt.connect();
-        
-        log('🔍 Getting service...');
-        const service = await server.getPrimaryService('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
-        
-        log('🔍 Getting characteristic...');
-        characteristic = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
-        
-        const props = characteristic.properties;
-        log(`✅ Characteristic found!`);
-        log(`📋 Properties: notify=${props.notify}, read=${props.read}, write=${props.write}, writeWithoutResponse=${props.writeWithoutResponse}`);
-        
-        log('🔔 Enabling notifications...');
-        
-        // Add MULTIPLE event listeners to catch the event
-        characteristic.oncharacteristicvaluechanged = (event) => {
-          log('🔔 Event via oncharacteristicvaluechanged!');
-          handleNotification(event);
-        };
-        
-        characteristic.addEventListener('characteristicvaluechanged', (event) => {
-          log('🔔 Event via addEventListener!');
-          handleNotification(event);
-        });
+        async function connect() {
+            try {
+                log('Requesting Bluetooth Device...', 'info');
+                
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32-BLE-Test' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                
+                log(`Connected to device: ${bluetoothDevice.name}`, 'info');
+                
+                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+                
+                log('Connecting to GATT Server...', 'info');
+                gattServer = await bluetoothDevice.gatt.connect();
+                
+                log('Getting Primary Service...', 'info');
+                const service = await gattServer.getPrimaryService(SERVICE_UUID);
+                
+                log('Getting TX Characteristic...', 'info');
+                txCharacteristic = await service.getCharacteristic(TX_CHARACTERISTIC_UUID);
+                
+                log('Getting RX Characteristic...', 'info');
+                rxCharacteristic = await service.getCharacteristic(RX_CHARACTERISTIC_UUID);
+                
+                // Start notifications from ESP32
+                log('Starting notifications...', 'info');
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', handleNotification);
+                
+                log('✅ Successfully connected and ready!', 'info');
+                updateStatus(true);
+                
+            } catch(error) {
+                log(`❌ Error: ${error.message}`, 'info');
+                updateStatus(false);
+            }
+        }
         
         function handleNotification(event) {
-          const timestamp = new Date().toLocaleTimeString();
-          log(`🔔 handleNotification called at ${timestamp}`);
-          
-          try {
-            if (!event || !event.target || !event.target.value) {
-              log(`❌ Invalid event structure: ${JSON.stringify(event)}`);
-              return;
+            const value = new TextDecoder().decode(event.target.value);
+            receivedCount++;
+            document.getElementById('receivedCount').textContent = receivedCount;
+            log(`📥 ${value}`, 'received');
+        }
+        
+        async function disconnect() {
+            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                await bluetoothDevice.gatt.disconnect();
+                log('Disconnected from device', 'info');
+            }
+        }
+        
+        function onDisconnected(event) {
+            log('Device disconnected', 'info');
+            updateStatus(false);
+            txCharacteristic = null;
+            rxCharacteristic = null;
+        }
+        
+        async function sendMessage() {
+            const message = messageInput.value;
+            if (!message) {
+                alert('Please enter a message');
+                return;
             }
             
-            const value = new TextDecoder().decode(event.target.value);
-            pingCount++;
-            
-            log(`📨 ${value} (#${pingCount})`, true);
-            document.getElementById('pingCount').textContent = pingCount;
-            document.getElementById('pingCount').style.color = pingCount % 2 === 0 ? '#007AFF' : '#34C759';
-            
-            alert(`Ping received! #${pingCount}: ${value}`);
-          } catch (e) {
-            log(`❌ Decode error: ${e.message || e}`);
-          }
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(message);
+                await rxCharacteristic.writeValue(data);
+                
+                sentCount++;
+                document.getElementById('sentCount').textContent = sentCount;
+                log(`📤 Sent: ${message}`, 'sent');
+                messageInput.value = '';
+                
+            } catch(error) {
+                log(`❌ Send error: ${error.message}`, 'info');
+            }
         }
         
-        await characteristic.startNotifications();
-        log('✅ Notifications enabled successfully');
-        log(`🔍 Notification state: ${characteristic.properties.notify}`);
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        sendBtn.addEventListener('click', sendMessage);
         
-        // Try reading the characteristic value
-        try {
-          const readValue = await characteristic.readValue();
-          const readText = new TextDecoder().decode(readValue);
-          log(`📖 Read test: "${readText}"`);
-        } catch (e) {
-          log(`⚠️ Read test failed: ${e.message || 'not readable'}`);
-        }
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
         
-        // Enable send button
-        document.getElementById('sendBtn').disabled = false;
-
-        document.getElementById('status').className = 'status connected';
-        document.getElementById('status').textContent = '✅ Connected - ESP32 will ping every 5 seconds';
-        log('🎉 Ready! Counting pings from ESP32');
-        log('💡 Keep this page open to receive pings');
-        log('⏳ Waiting for pings... (every 5 seconds)');
-        log('🔍 Check browser console (F12) for detailed logs');
+        // Detect visibility changes (important for background testing)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                log('⚠️ Page hidden (screen locked or app backgrounded)', 'info');
+            } else {
+                log('👁️ Page visible again', 'info');
+            }
+        });
         
-      } catch (error) {
-        log(`❌ Error: ${error.message}`);
-        document.getElementById('status').className = 'status disconnected';
-        document.getElementById('status').textContent = `❌ Error: ${error.message}`;
-        
-        if (error.message.includes('User cancelled')) {
-          log('ℹ️ Connection cancelled by user');
-        }
-      }
-    }
-
-    // Log initial state
-    window.addEventListener('load', () => {
-      log('📱 App ready - Click "Connect to ESP32" to start');
-      
-      // Check if Web Bluetooth is supported
-      if (!navigator.bluetooth) {
-        log('❌ Web Bluetooth not supported on this browser');
-        alert('Web Bluetooth is not supported on this browser. Please use Chrome on Android or a compatible browser.');
-      }
-    });
-  </script>
+        // Log when page loads
+        window.addEventListener('load', () => {
+            log('🌐 Page loaded - Ready for Bluetooth', 'info');
+        });
+    </script>
 </body>
 </html>
