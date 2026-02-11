@@ -895,7 +895,7 @@
         //  SNAPPING ENGINE (Turf.js)
         // ═══════════════════════════════════════════════════════
 
-        function onGpsUpdate() {
+        async function onGpsUpdate() {
             if (!currentPos || !routeGeometry || !routeSteps || routeSteps.length === 0) return;
 
             const routeLine = turf.lineString(routeGeometry.coordinates);
