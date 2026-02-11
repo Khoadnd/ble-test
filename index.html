@@ -632,17 +632,18 @@
             }
         }
 
-        async function sendNavData(iconId, distMeters, etaSeconds) {
+        async function sendNavData(iconId, distMeters, etaSeconds, bearing) {
             const now = Date.now();
             if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
             lastSendTime = now;
 
-            const buf = new ArrayBuffer(10);
+            const buf = new ArrayBuffer(12);
             const dv = new DataView(buf);
             dv.setUint8(0, PKT_NAV_DATA);
             dv.setUint8(1, iconId);
             dv.setUint32(2, Math.round(distMeters), true);
             dv.setUint32(6, Math.round(etaSeconds), true);
+            dv.setInt16(10, Math.round(bearing || 0), true);
             await bleWrite(buf);
         }
 
@@ -768,6 +769,30 @@
         }
 
         // ═══════════════════════════════════════════════════════
+        //  COMPASS LOGIC
+        // ═══════════════════════════════════════════════════════
+
+        let deviceHeading = 0;
+
+        function handleCompass() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(response => {
+                        if (response === 'granted') {
+                            window.addEventListener('deviceorientation', (e) => {
+                                deviceHeading = e.webkitCompassHeading || e.alpha || 0;
+                            });
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('deviceorientation', (e) => {
+                    deviceHeading = e.webkitCompassHeading || e.alpha || 0;
+                });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
         //  GPS
         // ═══════════════════════════════════════════════════════
 
@@ -812,6 +837,10 @@
                 alert('Please select a destination first');
                 return;
             }
+
+            // Start Audio & Compass
+            // silentAudio.play().catch(e => console.log('Audio auto-play blocked')); // Assuming silentAudio is defined elsewhere
+            handleCompass();
 
             log('🧭 Starting navigation…');
             statusText.textContent = 'Calculating route…';
@@ -973,14 +1002,30 @@
 
             // Calculate ETA (Remaining duration)
             let etaSeconds = 0;
-            // Time for current step partial
-            if (nextStep.distance > 0) {
-                const frac = distToTurn / nextStep.distance; // Fraction remaining
+            if (nextStep) {
+                const frac = nextStep.distance > 0 ? (distToTurn / nextStep.distance) : 0;
                 etaSeconds += (nextStep.duration || 0) * frac;
             }
             // Sum remaining steps
             for (let k = nextStepIdx + 1; k < routeSteps.length; k++) {
                 etaSeconds += routeSteps[k].duration || 0;
+            }
+
+            // Calculate Bearing (Relative to Device Heading)
+            // turf.bearing returns -180 to 180.
+            // mapbox bearing is 0-360?
+            // "deviceHeading" is 0-360 (North=0, East=90)
+            let relativeBearing = 0;
+            if (nextStep) {
+                // Bearing from User to Maneuver Point
+                const destPt = turf.point(nextStep.location);
+                const absBearing = turf.bearing(pt, destPt); // -180 to 180
+                const absBearingDeg = (absBearing + 360) % 360; // 0-360
+
+                // Relative = Target - Device
+                // Example: Target East (90), Device North (0) -> 90 (Right)
+                // Example: Target North (0), Device East (90) -> -90 (Left) -> 270
+                relativeBearing = (absBearingDeg - deviceHeading + 360) % 360;
             }
 
             // Update web UI
@@ -995,7 +1040,7 @@
             }
 
             // Send to ESP32 (Multiplexed)
-            await sendNavData(iconId, distToTurn, etaSeconds);
+            await sendNavData(iconId, distToTurn, etaSeconds, relativeBearing);
             await sendString(PKT_NEXT_STR, streetName);
             await sendString(PKT_CURR_STR, currStreetName);
         }
