@@ -706,8 +706,23 @@
 
         async function startNavigation() {
             if (!currentPos) {
-                alert('Waiting for GPS fix…');
-                return;
+                // Actively request GPS (triggers permission prompt if needed)
+                statusText.textContent = 'Requesting GPS…';
+                log('📡 Requesting GPS permission…');
+                try {
+                    const pos = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, {
+                            enableHighAccuracy: true, timeout: 10000
+                        });
+                    });
+                    currentPos = [pos.coords.longitude, pos.coords.latitude];
+                    startGpsWatch(); // restart watch now that we have permission
+                } catch (e) {
+                    alert('Cannot get GPS location. Please allow location access and try again.');
+                    statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
+                    log('GPS denied: ' + e.message, 'err');
+                    return;
+                }
             }
             if (!destCoords) {
                 alert('Please select a destination first');
