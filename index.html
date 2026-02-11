@@ -241,14 +241,11 @@
         </div>
 
         <div class="warning" style="margin-top: 20px;">
-            <strong>🧩 Background Tracking:</strong>
+            <strong>🧩 Background Mode:</strong>
             <button id="bgModeBtn" class="btn-connect" style="margin-top: 10px; background: #f39c12;">Enable Background
                 Mode 🔇</button>
-            <div style="margin-top: 10px; font-size: 14px;">
-                Heading: <span id="headingValue" style="font-weight: bold; font-size: 18px;">---</span>°
-            </div>
             <p style="font-size: 12px; margin-top: 5px; color: #666;">
-                Requires tapping "Enable" to play silent audio and keep app alive when locked.
+                Tap to enable silent audio. This keeps the connection alive when phone is locked.
             </p>
         </div>
 
@@ -304,10 +301,8 @@
         let audioContext = null;
         let silentAudio = null;
         let isBackgroundEnabled = false;
-        let currentHeading = 0;
 
         const bgModeBtn = document.getElementById('bgModeBtn');
-        const headingDisplay = document.getElementById('headingValue');
 
         function log(message, type = 'info') {
             const timestamp = new Date().toLocaleTimeString();
@@ -438,10 +433,8 @@
 
                 sentCount++;
                 document.getElementById('sentCount').textContent = sentCount;
-                document.getElementById('sentCount').textContent = sentCount;
-                // Only log manual messages or periodic ones if not too fast? 
-                // Let's log all for now as requested.
-                // log(`📤 Sent: ${message}`, 'sent'); // Commented out to reduce noise
+
+                // Log only occasionally to prevent spamming the UI log
                 if (!periodicTimer || periodicCount % 5 === 0) {
                     log(`📤 Sent: ${message}`, 'sent');
                 }
@@ -469,12 +462,7 @@
             periodicTimer = setInterval(() => {
                 if (bluetoothDevice && bluetoothDevice.gatt.connected) {
                     periodicCount++;
-                    // If background mode is on and we have a heading, send that
-                    if (isBackgroundEnabled && currentHeading !== 0) {
-                        sendData(`H: ${currentHeading}`);
-                    } else {
-                        sendData(`Ping ${periodicCount}`);
-                    }
+                    sendData(`Ping ${periodicCount}`);
                 } else {
                     stopPeriodicSend();
                 }
@@ -492,58 +480,27 @@
                         silentAudio.loop = true;
                     }
 
-                    // Request Device Orientation Permission (iOS 13+)
-                    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                        const response = await DeviceOrientationEvent.requestPermission();
-                        if (response !== 'granted') {
-                            alert('Permission to access orientation was denied');
-                            return;
-                        }
-                    }
-
-                    // Start playing silent audio
+                    // Start playing silent audio immediately
                     await silentAudio.play();
-
-                    // Add orientation listener
-                    window.addEventListener('deviceorientation', handleOrientation);
 
                     bgModeBtn.textContent = 'Disable Background Mode 🔇';
                     bgModeBtn.style.background = '#e74c3c';
                     isBackgroundEnabled = true;
-                    log('✅ Background mode enabled (Audio & Compass)', 'info');
+                    log('✅ Background mode enabled (Audio only)', 'info');
 
                 } catch (e) {
                     log(`❌ Error enabling bg mode: ${e.message}`, 'info');
-                    alert('Tap anywhere to enable audio for background mode.');
                 }
             } else {
                 if (silentAudio) {
                     silentAudio.pause();
                 }
-                window.removeEventListener('deviceorientation', handleOrientation);
 
                 bgModeBtn.textContent = 'Enable Background Mode 🔇';
                 bgModeBtn.style.background = '#f39c12';
                 isBackgroundEnabled = false;
                 log('⏹️ Background mode disabled', 'info');
-                headingDisplay.textContent = '---';
             }
-        }
-
-        function handleOrientation(event) {
-            // iOS: event.webkitCompassHeading, Android: computed from alpha
-            let heading = 0;
-
-            if (event.webkitCompassHeading) {
-                // iOS
-                heading = event.webkitCompassHeading;
-            } else if (event.alpha !== null) {
-                // Android (absolute) - roughly
-                heading = 360 - event.alpha;
-            }
-
-            currentHeading = Math.round(heading);
-            headingDisplay.textContent = currentHeading;
         }
 
         function stopPeriodicSend() {
