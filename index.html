@@ -663,24 +663,74 @@
                 navBtn.disabled = false;
                 log('📍 Destination: ' + e.result.place_name);
 
+                // Destination marker
                 if (window._destMarker) window._destMarker.remove();
                 window._destMarker = new mapboxgl.Marker({ color: '#ff4466' })
                     .setLngLat(destCoords)
                     .addTo(map);
+
+                // Auto-preview route
+                if (currentPos) {
+                    fetchAndDrawRoute(currentPos, destCoords, true);
+                }
+
+                // Fit map to show both origin & destination
+                if (currentPos) {
+                    map.fitBounds([currentPos, destCoords], {
+                        padding: { top: 100, bottom: 280, left: 40, right: 40 },
+                        maxZoom: 15
+                    });
+                }
             });
 
-            map.addControl(new mapboxgl.GeolocateControl({
+            // Geolocate control — auto-trigger on load
+            const geoCtrl = new mapboxgl.GeolocateControl({
                 positionOptions: { enableHighAccuracy: true },
                 trackUserLocation: true,
                 showUserHeading: true
-            }), 'top-right');
+            });
+            map.addControl(geoCtrl, 'top-right');
 
             map.on('load', () => {
                 log('🗺️ Map loaded');
+                // Auto-trigger location (shows blue dot immediately)
+                geoCtrl.trigger();
                 startGpsWatch();
             });
 
             log('Map initialized with token');
+        }
+
+        // Fetch route and draw it. If `previewOnly`, just draw without starting nav.
+        async function fetchAndDrawRoute(origin, dest, previewOnly = false) {
+            try {
+                const url = `https://api.mapbox.com/directions/v5/mapbox/driving/` +
+                    `${origin[0]},${origin[1]};${dest[0]},${dest[1]}` +
+                    `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (!data.routes || !data.routes.length) {
+                    log('No route found', 'err');
+                    return null;
+                }
+
+                const route = data.routes[0];
+                drawRoute(route.geometry);
+
+                if (previewOnly) {
+                    const mins = Math.round(route.duration / 60);
+                    const km = (route.distance / 1000).toFixed(1);
+                    navBtn.textContent = `Navigate (${km} km · ${mins} min)`;
+                    log(`Route preview: ${km} km, ~${mins} min`);
+                }
+
+                return route;
+            } catch (e) {
+                log('Route error: ' + e.message, 'err');
+                return null;
+            }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -729,65 +779,50 @@
                 return;
             }
 
-            log('🧭 Fetching route…');
+            log('🧭 Starting navigation…');
             statusText.textContent = 'Calculating route…';
 
-            try {
-                const url = `https://api.mapbox.com/directions/v5/mapbox/driving/` +
-                    `${currentPos[0]},${currentPos[1]};${destCoords[0]},${destCoords[1]}` +
-                    `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-
-                const res = await fetch(url);
-                const data = await res.json();
-
-                if (!data.routes || !data.routes.length) {
-                    log('No route found', 'err');
-                    alert('No route found');
-                    return;
-                }
-
-                const route = data.routes[0];
-                routeGeometry = route.geometry;
-                routeSteps = [];
-
-                // Flatten steps from all legs
-                for (const leg of route.legs) {
-                    for (const step of leg.steps) {
-                        routeSteps.push({
-                            maneuver: step.maneuver,
-                            name: step.name || '',
-                            distance: step.distance,
-                            location: step.maneuver.location  // [lng, lat] of the maneuver
-                        });
-                    }
-                }
-
-                log(`Route: ${routeSteps.length} steps, ${(route.distance / 1000).toFixed(1)} km`);
-
-                // Draw route on map
-                drawRoute(routeGeometry);
-
-                // Start nav mode
-                navigating = true;
-                navInfo.classList.add('active');
-                navBtn.style.display = 'none';
-                stopBtn.style.display = 'block';
-                $('destSection').style.display = 'none';
-                statusText.textContent = 'Navigating…';
-
-                // Initial update
-                onGpsUpdate();
-
-            } catch (e) {
-                log('Route error: ' + e.message, 'err');
-                alert('Failed to get route: ' + e.message);
+            const route = await fetchAndDrawRoute(currentPos, destCoords, false);
+            if (!route) {
+                alert('No route found');
+                statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
+                return;
             }
+
+            routeGeometry = route.geometry;
+            routeSteps = [];
+
+            // Flatten steps from all legs
+            for (const leg of route.legs) {
+                for (const step of leg.steps) {
+                    routeSteps.push({
+                        maneuver: step.maneuver,
+                        name: step.name || '',
+                        distance: step.distance,
+                        location: step.maneuver.location
+                    });
+                }
+            }
+
+            log(`Route: ${routeSteps.length} steps, ${(route.distance / 1000).toFixed(1)} km`);
+
+            // Start nav mode
+            navigating = true;
+            navInfo.classList.add('active');
+            navBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            $('destSection').style.display = 'none';
+            statusText.textContent = 'Navigating…';
+
+            // Initial update
+            onGpsUpdate();
         }
 
         function stopNavigation() {
             navigating = false;
             navInfo.classList.remove('active');
             navBtn.style.display = 'block';
+            navBtn.textContent = 'Navigate';
             stopBtn.style.display = 'none';
             $('destSection').style.display = 'block';
             statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
