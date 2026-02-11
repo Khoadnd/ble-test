@@ -606,32 +606,66 @@
         const PACKET_SIZE = 37;     // 1 + 4 + 32
         const STREET_MAX_BYTES = 32;
 
-        async function sendNavPacket(iconId, distMeters, street) {
-            if (!bleChar || !bleConnected || isWriting) return;
+        // ═══════════════════════════════════════════════════════
+        //  BLE — Multiplexed Sender
+        //  Opcode 0x01: Data (Icon, Dist, ETA)
+        //  Opcode 0x02: Next Street
+        //  Opcode 0x03: Current Street
+        // ═══════════════════════════════════════════════════════
 
+        const PKT_NAV_DATA = 0x01;
+        const PKT_NEXT_STR = 0x02;
+        const PKT_CURR_STR = 0x03;
+
+        let lastNextStr = '';
+        let lastCurrStr = '';
+
+        async function bleWrite(buf) {
+            if (!bleChar || !bleConnected || isWriting) return;
+            isWriting = true;
+            try {
+                await bleChar.writeValueWithoutResponse(buf);
+            } catch (e) {
+                // log('Write error: ' + e.message, 'err');
+            } finally {
+                isWriting = false;
+            }
+        }
+
+        async function sendNavData(iconId, distMeters, etaSeconds) {
             const now = Date.now();
             if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
             lastSendTime = now;
 
-            isWriting = true;
-            try {
-                const buf = new ArrayBuffer(PACKET_SIZE);
-                const dv = new DataView(buf);
-                dv.setUint8(0, iconId);
-                dv.setUint32(1, Math.round(distMeters), true); // little-endian
+            const buf = new ArrayBuffer(10);
+            const dv = new DataView(buf);
+            dv.setUint8(0, PKT_NAV_DATA);
+            dv.setUint8(1, iconId);
+            dv.setUint32(2, Math.round(distMeters), true);
+            dv.setUint32(6, Math.round(etaSeconds), true);
+            await bleWrite(buf);
+        }
 
-                // Strip diacritics for ESP32 display, truncate to fit 32 bytes
-                const ascii = stripDiacritics(street || '');
-                const streetBytes = truncateToBytes(ascii, STREET_MAX_BYTES);
-                const u8 = new Uint8Array(buf);
-                u8.set(streetBytes, 5);   // rest is zero-padded by ArrayBuffer
+        async function sendString(type, str) {
+            str = stripDiacritics(str || '').trim();
 
-                await bleChar.writeValueWithoutResponse(buf);
-            } catch (e) {
-                log('Send error: ' + e.message, 'err');
-            } finally {
-                isWriting = false;
+            // Deduplicate logic
+            if (type === PKT_NEXT_STR) {
+                if (str === lastNextStr) return;
+                lastNextStr = str;
+            } else if (type === PKT_CURR_STR) {
+                if (str === lastCurrStr) return;
+                lastCurrStr = str;
             }
+
+            const encoded = truncateToBytes(str, 32);
+            const buf = new ArrayBuffer(1 + encoded.length);
+            const u8 = new Uint8Array(buf);
+            u8[0] = type;
+            u8.set(encoded, 1);
+
+            // Force write immediately (bypass interval check)
+            try { await bleChar.writeValueWithoutResponse(buf); } catch (e) { }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -799,6 +833,7 @@
                         maneuver: step.maneuver,
                         name: step.name || '',
                         distance: step.distance,
+                        duration: step.duration || 0,
                         location: step.maneuver.location
                     });
                 }
@@ -928,7 +963,25 @@
                 iconId = 4;
             }
 
-            const streetName = nextStep.name || nextStep.maneuver.instruction?.substring(0, 16) || '';
+            const streetName = nextStep.name || nextStep.maneuver.instruction || '';
+
+            // Identify Current Street (Road we are currently on)
+            let currStreetName = 'Start';
+            if (nextStepIdx > 0 && routeSteps[nextStepIdx - 1]) {
+                currStreetName = routeSteps[nextStepIdx - 1].name || 'Road';
+            }
+
+            // Calculate ETA (Remaining duration)
+            let etaSeconds = 0;
+            // Time for current step partial
+            if (nextStep.distance > 0) {
+                const frac = distToTurn / nextStep.distance; // Fraction remaining
+                etaSeconds += (nextStep.duration || 0) * frac;
+            }
+            // Sum remaining steps
+            for (let k = nextStepIdx + 1; k < routeSteps.length; k++) {
+                etaSeconds += routeSteps[k].duration || 0;
+            }
 
             // Update web UI
             navIcon.textContent = ICON_ARROWS[iconId] || '↑';
@@ -941,8 +994,10 @@
                 navUnit.textContent = 'm';
             }
 
-            // Send to ESP32
-            sendNavPacket(iconId, distToTurn, streetName);
+            // Send to ESP32 (Multiplexed)
+            await sendNavData(iconId, distToTurn, etaSeconds);
+            await sendString(PKT_NEXT_STR, streetName);
+            await sendString(PKT_CURR_STR, currStreetName);
         }
 
         // ═══════════════════════════════════════════════════════
