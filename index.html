@@ -194,27 +194,52 @@
         
         log('🔔 Enabling notifications...');
         
-        // Add event listener BEFORE starting notifications
+        // Add MULTIPLE event listeners to catch the event
+        characteristic.oncharacteristicvaluechanged = (event) => {
+          log('🔔 Event via oncharacteristicvaluechanged!');
+          handleNotification(event);
+        };
+        
         characteristic.addEventListener('characteristicvaluechanged', (event) => {
+          log('🔔 Event via addEventListener!');
+          handleNotification(event);
+        });
+        
+        function handleNotification(event) {
           const timestamp = new Date().toLocaleTimeString();
+          log(`🔔 handleNotification called at ${timestamp}`);
           
           try {
+            if (!event || !event.target || !event.target.value) {
+              log(`❌ Invalid event structure: ${JSON.stringify(event)}`);
+              return;
+            }
+            
             const value = new TextDecoder().decode(event.target.value);
             pingCount++;
             
-            log(`📨 [${timestamp}] ${value} (Ping #${pingCount})`, true);
+            log(`📨 ${value} (#${pingCount})`, true);
             document.getElementById('pingCount').textContent = pingCount;
-            
-            // Force UI update
             document.getElementById('pingCount').style.color = pingCount % 2 === 0 ? '#007AFF' : '#34C759';
+            
+            alert(`Ping received! #${pingCount}: ${value}`);
           } catch (e) {
             log(`❌ Decode error: ${e.message || e}`);
-            alert(`Decode error: ${e.message || e}`);
           }
-        });
+        }
         
         await characteristic.startNotifications();
         log('✅ Notifications enabled successfully');
+        log(`🔍 Notification state: ${characteristic.properties.notify}`);
+        
+        // Try reading the characteristic value
+        try {
+          const readValue = await characteristic.readValue();
+          const readText = new TextDecoder().decode(readValue);
+          log(`📖 Read test: "${readText}"`);
+        } catch (e) {
+          log(`⚠️ Read test failed: ${e.message || 'not readable'}`);
+        }
         
         // Enable send button
         document.getElementById('sendBtn').disabled = false;
