@@ -482,28 +482,45 @@
         async function toggleBackgroundMode() {
             if (!isBackgroundEnabled) {
                 try {
-                    // Create silent audio element if not exists
-                    if (!silentAudio) {
-                        silentAudio = new Audio();
-                        // 1 second of silent MP3
-                        silentAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbQAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAASAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAATMOpAAAAAABhAAaAAAAABzsDPwMHAwADAwMAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAA';
-                        silentAudio.loop = true;
+                    // Use Web Audio API for background keep-alive (more robust)
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioContext) {
+                        throw new Error('Web Audio API not supported');
                     }
 
-                    // Start playing silent audio immediately
-                    await silentAudio.play();
+                    if (!audioContext) {
+                        audioContext = new AudioContext();
+                    }
+
+                    // Resume context if suspended (browser policy)
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                    }
+
+                    // Create a silent oscillator
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+
+                    // Very low volume (effectively silent but keeps audio engine active)
+                    gainNode.gain.value = 0.0001;
+
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+
+                    oscillator.start();
 
                     bgModeBtn.textContent = 'Disable Background Mode 🔇';
                     bgModeBtn.style.background = '#e74c3c';
                     isBackgroundEnabled = true;
-                    log('✅ Background mode enabled (Audio only)', 'info');
+                    log('✅ Background mode enabled (Web Audio API)', 'info');
 
                 } catch (e) {
                     log(`❌ Error enabling bg mode: ${e.message}`, 'info');
+                    alert('Tap anywhere to enable audio for background mode.');
                 }
             } else {
-                if (silentAudio) {
-                    silentAudio.pause();
+                if (audioContext) {
+                    await audioContext.suspend();
                 }
 
                 bgModeBtn.textContent = 'Enable Background Mode 🔇';
