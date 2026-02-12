@@ -1187,11 +1187,22 @@
             if (heading !== null && !Number.isNaN(heading)) {
                 setCompassHeading(heading);
                 if (navigating && lastNavPayload) {
+                    let preview = lastNavPayload.preview;
+                    if (routeGeometry && Number.isFinite(lastNavPayload.snapDist)) {
+                        const routeLine = turf.lineString(routeGeometry.coordinates);
+                        preview = buildPreviewPoints(
+                            routeLine,
+                            lastNavPayload.snapDist,
+                            lastNavPayload.distToTurn,
+                            getHeadingToSend()
+                        );
+                        lastNavPayload.preview = preview;
+                    }
                     sendNavPacket(
                         lastNavPayload.iconId,
                         lastNavPayload.distMeters,
                         lastNavPayload.streetName,
-                        lastNavPayload.preview,
+                        preview,
                         getHeadingToSend()
                     );
                 }
@@ -1216,13 +1227,14 @@
             }
         }
 
-        function buildPreviewPoints(routeLine, snapDist, distToTurn) {
+        function buildPreviewPoints(routeLine, snapDist, distToTurn, headingDeg) {
             const lineLength = turf.length(routeLine, { units: 'meters' });
             if (!isFinite(lineLength) || lineLength <= 0) return { count: 0, points: [] };
 
             const basePoint = turf.along(routeLine, snapDist, { units: 'meters' });
             const aheadPoint = turf.along(routeLine, Math.min(snapDist + 10, lineLength), { units: 'meters' });
-            const heading = turf.bearing(basePoint, aheadPoint);
+            const routeHeading = turf.bearing(basePoint, aheadPoint);
+            const headingRef = Number.isFinite(headingDeg) ? headingDeg : routeHeading;
             const remaining = Math.max(0, lineLength - snapDist);
             let lookahead = Math.min(PREVIEW_LOOKAHEAD, remaining);
             if (Number.isFinite(distToTurn)) {
@@ -1238,7 +1250,7 @@
                 const p = turf.along(routeLine, d, { units: 'meters' });
                 const dist = turf.distance(basePoint, p, { units: 'meters' });
                 const bearing = turf.bearing(basePoint, p);
-                const rel = (bearing - heading) * Math.PI / 180;
+                const rel = (bearing - headingRef) * Math.PI / 180;
                 const x = Math.sin(rel) * dist;
                 const y = Math.cos(rel) * dist;
                 const scale = PREVIEW_RANGE / PREVIEW_LOOKAHEAD;
@@ -1305,9 +1317,9 @@
             }
 
             const streetName = nextStep.name || '';
-            const preview = buildPreviewPoints(routeLine, snappedDist, distToTurn);
             const headingToSend = getHeadingToSend();
-            lastNavPayload = { iconId, distMeters: distToTurn, streetName, preview };
+            const preview = buildPreviewPoints(routeLine, snappedDist, distToTurn, headingToSend);
+            lastNavPayload = { iconId, distMeters: distToTurn, streetName, preview, snapDist: snappedDist, distToTurn };
 
             // Update web UI
             navIcon.textContent = ICON_ARROWS[iconId] || '↑';
