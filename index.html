@@ -55,6 +55,61 @@
             z-index: 1;
         }
 
+        .mini-map-wrap {
+            position: absolute;
+            top: 110px;
+            right: 16px;
+            width: 148px;
+            height: 148px;
+            border-radius: 50%;
+            overflow: hidden;
+            z-index: 200;
+            pointer-events: none;
+            box-shadow: 0 18px 35px rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.06), rgba(10, 14, 26, 0.9));
+        }
+
+        .mini-map-wrap::after {
+            content: "";
+            position: absolute;
+            inset: 8px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+        }
+
+        .mini-map {
+            width: 100%;
+            height: 100%;
+            filter: saturate(1.1) contrast(1.05);
+        }
+
+        .mini-compass {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 0;
+            height: 0;
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-bottom: 18px solid rgba(0, 200, 255, 0.95);
+            transform: translate(-50%, -50%) rotate(0deg);
+            filter: drop-shadow(0 0 6px rgba(0, 200, 255, 0.6));
+        }
+
+        .mini-compass::after {
+            content: "";
+            position: absolute;
+            left: -2px;
+            top: 16px;
+            width: 4px;
+            height: 10px;
+            background: rgba(0, 200, 255, 0.6);
+            border-radius: 2px;
+        }
+
         /* ── Top Bar ─────────────────────────────── */
         .top-bar {
             position: absolute;
@@ -383,6 +438,10 @@
 
     <!-- ════ MAP ════ -->
     <div id="map"></div>
+    <div class="mini-map-wrap" id="miniMapWrap">
+        <div class="mini-map" id="miniMap"></div>
+        <div class="mini-compass" id="miniCompass"></div>
+    </div>
 
     <!-- ════ TOP BAR ════ -->
     <div class="top-bar">
@@ -487,6 +546,11 @@
         let routePolyline = null;
         let destMarker = null;
         let hasCentered = false;
+        let miniMap = null;
+        let miniRoute = null;
+        let miniUserMarker = null;
+        let miniDestMarker = null;
+        let compassHeading = null;
         let currentPos = null;
         let routeGeometry = null, routeSteps = null;
         let navigating = false, navTimer = null;
@@ -519,6 +583,7 @@
         const navUnit = $('navUnit');
         const destInput = $('destInput');
         const destSuggestions = $('destSuggestions');
+        const miniCompass = $('miniCompass');
         const logPanel = $('logPanel');
         const logToggle = $('logToggle');
 
@@ -623,9 +688,10 @@
         //    uint32 dist_meters (LE),
         //    char   street[32],
         //    uint8  preview_count,
-        //    int8   preview_xy[12] (6 points: x,y)
+        //    int8   preview_xy[12] (6 points: x,y),
+        //    uint16 heading_deg (0-359, LE)
         //  }
-        //  Total: 50 bytes
+        //  Total: 52 bytes
         // ═══════════════════════════════════════════════════════
 
         // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
@@ -662,9 +728,10 @@
         const STREET_MAX_BYTES = 32;
         const PREVIEW_COUNT_OFFSET = 1 + 4 + STREET_MAX_BYTES;
         const PREVIEW_DATA_OFFSET = PREVIEW_COUNT_OFFSET + 1;
-        const PACKET_SIZE = PREVIEW_DATA_OFFSET + PREVIEW_BYTES;
+        const HEADING_OFFSET = PREVIEW_DATA_OFFSET + PREVIEW_BYTES;
+        const PACKET_SIZE = HEADING_OFFSET + 2;
 
-        async function sendNavPacket(iconId, distMeters, street, preview) {
+        async function sendNavPacket(iconId, distMeters, street, preview, headingDeg) {
             if (!bleChar || !bleConnected || isWriting) return;
 
             const now = Date.now();
@@ -694,6 +761,9 @@
                     dv.setInt8(previewOffset + idx, px);
                     dv.setInt8(previewOffset + idx + 1, py);
                 }
+
+                const heading = Math.max(0, Math.min(359, Math.round(headingDeg || 0)));
+                dv.setUint16(HEADING_OFFSET, heading, true);
 
                 await bleChar.writeValueWithoutResponse(buf);
             } catch (e) {
@@ -732,9 +802,42 @@
             }).addTo(map);
 
             map.setView([10.7769, 106.7009], 13);
+            initMiniMap(tileUrl);
             setupAutocomplete();
             startGpsWatch();
             log('🗺️ Map initialized');
+        }
+
+        function initMiniMap(tileUrl) {
+            if (miniMap) {
+                miniMap.remove();
+                miniMap = null;
+            }
+
+            miniMap = L.map('miniMap', {
+                zoomControl: false,
+                attributionControl: false,
+                dragging: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+                boxZoom: false,
+                keyboard: false,
+                touchZoom: false,
+                zoomSnap: 0
+            });
+
+            if (miniMap.tap) miniMap.tap.disable();
+
+            L.tileLayer(tileUrl, {
+                maxZoom: 22,
+                subdomains: 'abcd',
+                tileSize: 256
+            }).addTo(miniMap);
+
+            miniMap.setView([10.7769, 106.7009], 16);
+            miniRoute = null;
+            miniUserMarker = null;
+            miniDestMarker = null;
         }
 
         function setupAutocomplete() {
@@ -860,6 +963,17 @@
                 fillOpacity: 1
             }).addTo(map);
 
+            if (miniMap) {
+                if (miniDestMarker) miniMap.removeLayer(miniDestMarker);
+                miniDestMarker = L.circleMarker([lat, lon], {
+                    radius: 4,
+                    color: '#ffffff',
+                    weight: 1,
+                    fillColor: '#ff4466',
+                    fillOpacity: 1
+                }).addTo(miniMap);
+            }
+
             if (currentPos) {
                 fetchAndDrawRoute(currentPos, destCoords, true);
                 fitBoundsToRoute(currentPos, destCoords);
@@ -930,6 +1044,15 @@
                 weight: 5,
                 opacity: 0.85
             }).addTo(map);
+
+            if (miniMap) {
+                if (miniRoute) miniMap.removeLayer(miniRoute);
+                miniRoute = L.polyline(latLngs, {
+                    color: '#00c8ff',
+                    weight: 3,
+                    opacity: 0.9
+                }).addTo(miniMap);
+            }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -969,6 +1092,25 @@
             if (!hasCentered) {
                 map.setView(latLng, 15);
                 hasCentered = true;
+            }
+
+            if (miniMap) {
+                if (!miniUserMarker) {
+                    miniUserMarker = L.circleMarker(latLng, {
+                        radius: 4,
+                        color: '#ffffff',
+                        weight: 1,
+                        fillColor: '#00c8ff',
+                        fillOpacity: 1
+                    }).addTo(miniMap);
+                } else {
+                    miniUserMarker.setLatLng(latLng);
+                }
+                miniMap.setView(latLng, 16, { animate: false });
+            }
+
+            if (Number.isFinite(pos.coords.heading)) {
+                setCompassHeading(pos.coords.heading);
             }
         }
 
@@ -1086,6 +1228,10 @@
                 map.removeLayer(routePolyline);
                 routePolyline = null;
             }
+            if (miniRoute && miniMap) {
+                miniMap.removeLayer(miniRoute);
+                miniRoute = null;
+            }
             routeGeometry = null;
             routeSteps = null;
 
@@ -1103,6 +1249,42 @@
             if (angle > 15) return 2;
             if (angle < -15) return 1;
             return 0;
+        }
+
+        function setCompassHeading(deg) {
+            if (!miniCompass) return;
+            const normalized = ((deg % 360) + 360) % 360;
+            compassHeading = normalized;
+            miniCompass.style.transform = `translate(-50%, -50%) rotate(${normalized}deg)`;
+        }
+
+        function handleOrientation(event) {
+            let heading = null;
+            if (typeof event.webkitCompassHeading === 'number') {
+                heading = event.webkitCompassHeading;
+            } else if (typeof event.alpha === 'number') {
+                heading = 360 - event.alpha;
+            }
+            if (heading !== null && !Number.isNaN(heading)) {
+                setCompassHeading(heading);
+            }
+        }
+
+        async function requestOrientationPermission() {
+            if (typeof DeviceOrientationEvent === 'undefined') return;
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const res = await DeviceOrientationEvent.requestPermission();
+                    if (res === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation, true);
+                    }
+                } catch (e) {
+                    log('Compass permission denied', 'err');
+                }
+            } else {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
         }
 
         function buildPreviewPoints(routeLine, snapDist) {
@@ -1189,6 +1371,7 @@
 
             const streetName = nextStep.name || '';
             const preview = buildPreviewPoints(routeLine, snappedDist);
+            const headingToSend = compassHeading ?? 0;
 
             // Update web UI
             navIcon.textContent = ICON_ARROWS[iconId] || '↑';
@@ -1202,7 +1385,7 @@
             }
 
             // Send to ESP32
-            sendNavPacket(iconId, distToTurn, streetName, preview);
+            sendNavPacket(iconId, distToTurn, streetName, preview, headingToSend);
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1223,6 +1406,7 @@
             localStorage.setItem('tomtom_key', k);
             keyOverlay.classList.add('hidden');
             initMap();
+            requestOrientationPermission();
         }
 
         keyBtn.addEventListener('click', applyKey);
@@ -1241,6 +1425,7 @@
         // ═══════════════════════════════════════════════════════
 
         connectBtn.addEventListener('click', bleConnect);
+        connectBtn.addEventListener('click', requestOrientationPermission);
         navBtn.addEventListener('click', startNavigation);
         stopBtn.addEventListener('click', stopNavigation);
 
