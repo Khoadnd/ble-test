@@ -5,16 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>MotoHUD Navigator</title>
-    <meta name="description" content="Motorcycle HUD Navigation Brain — Mapbox + BLE">
+    <meta name="description" content="Motorcycle HUD Navigation Brain — Google Maps + BLE">
 
-    <!-- Mapbox GL JS -->
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet">
-    <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
-    <!-- Mapbox Geocoder -->
-    <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.3/mapbox-gl-geocoder.css"
-        rel="stylesheet">
-    <script
-        src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.3/mapbox-gl-geocoder.min.js"></script>
+    <!-- Google Maps JS API is loaded dynamically after API key input -->
     <!-- Turf.js -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
 
@@ -321,49 +314,18 @@
             border-color: var(--accent);
         }
 
-        /* ── Geocoder override ───────────────────── */
-        .mapboxgl-ctrl-geocoder {
-            width: 100% !important;
-            max-width: none !important;
-            background: var(--bg) !important;
-            border: 1px solid var(--card-border) !important;
-            border-radius: var(--radius) !important;
-            color: var(--text) !important;
-            box-shadow: none !important;
-            font-size: 15px !important;
-        }
-
-        .mapboxgl-ctrl-geocoder input {
-            color: var(--text) !important;
-        }
-
-        .mapboxgl-ctrl-geocoder .suggestions {
-            background: var(--card) !important;
-            border: 1px solid var(--card-border) !important;
-            border-radius: 10px !important;
-        }
-
-        .mapboxgl-ctrl-geocoder .suggestions .active>a,
-        .mapboxgl-ctrl-geocoder .suggestions>li>a:hover {
-            background: var(--accent-dim) !important;
-            color: var(--text) !important;
-        }
-
-        .mapboxgl-ctrl-geocoder .suggestions>li>a {
-            color: var(--text) !important;
-        }
     </style>
 </head>
 
 <body>
 
     <!-- ════ TOKEN OVERLAY ════ -->
-    <div class="token-overlay" id="tokenOverlay">
+    <div class="token-overlay" id="keyOverlay">
         <div class="token-card">
-            <h2>🗺️ Mapbox Token</h2>
-            <p>Paste your Mapbox access token below. It will be saved in your browser for next time.</p>
-            <input type="text" id="tokenInput" placeholder="pk.eyJ1Ijo..." autocomplete="off" spellcheck="false">
-            <button class="btn btn-connect" id="tokenBtn">Start Map</button>
+            <h2>🗺️ Google Maps API Key</h2>
+            <p>Paste your Google Maps JavaScript API key. It will be saved in your browser for next time.</p>
+            <input type="text" id="keyInput" placeholder="AIza..." autocomplete="off" spellcheck="false">
+            <button class="btn btn-connect" id="keyBtn">Start Map</button>
         </div>
     </div>
 
@@ -392,7 +354,7 @@
 
         <!-- Destination search -->
         <div class="dest-section" id="destSection">
-            <div id="geocoder"></div>
+            <input class="dest-input" id="destInput" type="text" placeholder="Where to?" autocomplete="off">
         </div>
 
         <!-- Buttons -->
@@ -416,7 +378,7 @@
         //  CONFIGURATION
         // ═══════════════════════════════════════════════════════
 
-        let MAPBOX_TOKEN = localStorage.getItem('mapbox_token') || '';
+        let GOOGLE_MAPS_KEY = localStorage.getItem('gmaps_key') || '';
 
         // BLE UUIDs — must match ESP32 firmware
         const BLE_SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
@@ -424,29 +386,47 @@
         const BLE_DEVICE_NAME = 'MotoHUD';
 
         // Nav update rate (ms)
-        const NAV_UPDATE_INTERVAL = 50;
+        const NAV_UPDATE_INTERVAL = 250;
 
         // Maneuver icon map → icon_id for ESP32
         const MANEUVER_MAP = {
-            'straight': 0, 'turn right': 2, 'turn left': 1,
-            'sharp right': 2, 'sharp left': 1,
-            'slight right': 2, 'slight left': 1,
-            'uturn': 3, 'arrive': 4, 'depart': 0,
-            'merge right': 2, 'merge left': 1,
-            'roundabout': 2, 'rotary': 2,
-            'fork right': 2, 'fork left': 1,
-            'ramp right': 2, 'ramp left': 1,
-            'continue': 0, 'end of road right': 2, 'end of road left': 1,
+            'straight': 0,
+            'turn-left': 1,
+            'turn-right': 2,
+            'turn-slight-left': 1,
+            'turn-slight-right': 2,
+            'turn-sharp-left': 1,
+            'turn-sharp-right': 2,
+            'uturn-left': 3,
+            'uturn-right': 3,
+            'ramp-left': 1,
+            'ramp-right': 2,
+            'merge': 0,
+            'fork-left': 1,
+            'fork-right': 2,
+            'keep-left': 1,
+            'keep-right': 2,
+            'roundabout-left': 2,
+            'roundabout-right': 2,
+            'ferry': 0,
+            'ferry-train': 0,
         };
 
         const ICON_ARROWS = ['↑', '←', '→', '↩', '✓'];
+        const PREVIEW_MAX_POINTS = 6;
+        const PREVIEW_LOOKAHEAD = 200; // meters
+        const PREVIEW_RANGE = 50; // coordinate range (-50..50)
 
         // ═══════════════════════════════════════════════════════
         //  STATE
         // ═══════════════════════════════════════════════════════
 
         let bleDevice = null, bleChar = null, bleConnected = false;
-        let map, userMarker, gpsWatchId = null;
+        let map, userMarker, accuracyCircle, gpsWatchId = null;
+        let directionsService = null;
+        let routePolyline = null;
+        let destMarker = null;
+        let hasCentered = false;
         let currentPos = null;
         let routeGeometry = null, routeSteps = null;
         let navigating = false, navTimer = null;
@@ -573,8 +553,14 @@
 
         // ═══════════════════════════════════════════════════════
         //  BLE — NavPacket sender
-        //  Struct: { uint8 icon_id, uint32 dist_meters (LE), char[32] street }
-        //  Total: 37 bytes
+        //  Struct: {
+        //    uint8  icon_id,
+        //    uint32 dist_meters (LE),
+        //    char   street[32],
+        //    uint8  preview_count,
+        //    int8   preview_xy[12] (6 points: x,y)
+        //  }
+        //  Total: 50 bytes
         // ═══════════════════════════════════════════════════════
 
         // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
@@ -603,160 +589,188 @@
             return encoder.encode(str.substring(0, lo));
         }
 
-        const PACKET_SIZE = 37;     // 1 + 4 + 32
+        function stripHtml(html) {
+            return (html || '').replace(/<[^>]+>/g, '').trim();
+        }
+
+        const PREVIEW_BYTES = PREVIEW_MAX_POINTS * 2;
         const STREET_MAX_BYTES = 32;
+        const PREVIEW_COUNT_OFFSET = 1 + 4 + STREET_MAX_BYTES;
+        const PREVIEW_DATA_OFFSET = PREVIEW_COUNT_OFFSET + 1;
+        const PACKET_SIZE = PREVIEW_DATA_OFFSET + PREVIEW_BYTES;
 
-        // ═══════════════════════════════════════════════════════
-        //  BLE — Multiplexed Sender
-        //  Opcode 0x01: Data (Icon, Dist, ETA)
-        //  Opcode 0x02: Next Street
-        //  Opcode 0x03: Current Street
-        // ═══════════════════════════════════════════════════════
-
-        const PKT_NAV_DATA = 0x01;
-        const PKT_NEXT_STR = 0x02;
-        const PKT_CURR_STR = 0x03;
-
-        let lastNextStr = '';
-        let lastCurrStr = '';
-
-        async function bleWrite(buf) {
+        async function sendNavPacket(iconId, distMeters, street, preview) {
             if (!bleChar || !bleConnected || isWriting) return;
+
+            const now = Date.now();
+            if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
+            lastSendTime = now;
+
             isWriting = true;
             try {
+                const buf = new ArrayBuffer(PACKET_SIZE);
+                const dv = new DataView(buf);
+                dv.setUint8(0, iconId);
+                dv.setUint32(1, Math.round(distMeters), true); // little-endian
+
+                // Strip diacritics for ESP32 display, truncate to fit 32 bytes
+                const ascii = stripDiacritics(street || '');
+                const streetBytes = truncateToBytes(ascii, STREET_MAX_BYTES);
+                const u8 = new Uint8Array(buf);
+                u8.set(streetBytes, 5);   // rest is zero-padded by ArrayBuffer
+
+                const previewCount = Math.min(PREVIEW_MAX_POINTS, preview?.count || 0);
+                dv.setUint8(PREVIEW_COUNT_OFFSET, previewCount);
+                const previewOffset = PREVIEW_DATA_OFFSET;
+                for (let i = 0; i < PREVIEW_MAX_POINTS; i++) {
+                    const idx = i * 2;
+                    const px = preview?.points?.[i]?.x ?? 0;
+                    const py = preview?.points?.[i]?.y ?? 0;
+                    dv.setInt8(previewOffset + idx, px);
+                    dv.setInt8(previewOffset + idx + 1, py);
+                }
+
                 await bleChar.writeValueWithoutResponse(buf);
             } catch (e) {
-                // log('Write error: ' + e.message, 'err');
+                log('Send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
             }
         }
 
-        async function sendNavData(iconId, distMeters, etaSeconds, bearing) {
-            const now = Date.now();
-            if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
-            lastSendTime = now;
+        // ═══════════════════════════════════════════════════════
+        //  MAP — Google Maps JS API (loaded after API key)
+        // ═══════════════════════════════════════════════════════
 
-            const buf = new ArrayBuffer(12);
-            const dv = new DataView(buf);
-            dv.setUint8(0, PKT_NAV_DATA);
-            dv.setUint8(1, iconId);
-            dv.setUint32(2, Math.round(distMeters), true);
-            dv.setUint32(6, Math.round(etaSeconds), true);
-            dv.setInt16(10, Math.round(bearing || 0), true);
-            await bleWrite(buf);
-        }
-
-        async function sendString(type, str) {
-            str = stripDiacritics(str || '').trim();
-
-            // Deduplicate logic
-            if (type === PKT_NEXT_STR) {
-                if (str === lastNextStr) return;
-                lastNextStr = str;
-            } else if (type === PKT_CURR_STR) {
-                if (str === lastCurrStr) return;
-                lastCurrStr = str;
+        function loadGoogleMaps(key) {
+            if (!key) return;
+            if (window.google && window.google.maps) {
+                initMap();
+                return;
             }
-
-            const encoded = truncateToBytes(str, 32);
-            const buf = new ArrayBuffer(1 + encoded.length);
-            const u8 = new Uint8Array(buf);
-            u8[0] = type;
-            u8.set(encoded, 1);
-
-            // Force write immediately (bypass interval check)
-            try { await bleChar.writeValueWithoutResponse(buf); } catch (e) { }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=places&callback=initMap`;
+            script.async = true;
+            script.defer = true;
+            script.onerror = () => {
+                log('Google Maps failed to load. Check API key + network.', 'err');
+                keyOverlay.classList.remove('hidden');
+            };
+            document.head.appendChild(script);
         }
 
-        // ═══════════════════════════════════════════════════════
-        //  MAP — Mapbox GL JS (deferred until token is set)
-        // ═══════════════════════════════════════════════════════
+        window.initMap = initMap;
 
         function initMap() {
-            mapboxgl.accessToken = MAPBOX_TOKEN;
-
-            map = new mapboxgl.Map({
-                container: 'map',
-                style: 'mapbox://styles/mapbox/dark-v11',
-                center: [100.5018, 13.7563],
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 10.7769, lng: 106.7009 },
                 zoom: 13,
-                attributionControl: false
+                mapTypeControl: false,
+                streetViewControl: false,
+                fullscreenControl: false,
+                gestureHandling: 'greedy',
+                styles: [
+                    { elementType: 'geometry', stylers: [{ color: '#0b0f1c' }] },
+                    { elementType: 'labels.text.stroke', stylers: [{ color: '#0b0f1c' }] },
+                    { elementType: 'labels.text.fill', stylers: [{ color: '#8c94b8' }] },
+                    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+                    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1b2138' }] },
+                    { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#2a3356' }] },
+                    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#05080f' }] },
+                ]
             });
 
-            const geocoder = new MapboxGeocoder({
-                accessToken: MAPBOX_TOKEN,
-                mapboxgl: mapboxgl,
-                placeholder: 'Where to?',
-                marker: false,
-                flyTo: { speed: 2 }
-            });
-            $('geocoder').appendChild(geocoder.onAdd(map));
+            directionsService = new google.maps.DirectionsService();
+            setupAutocomplete();
+            startGpsWatch();
+            log('🗺️ Map initialized');
+        }
 
-            geocoder.on('result', (e) => {
-                destCoords = e.result.center;
+        function setupAutocomplete() {
+            const input = $('destInput');
+            const autocomplete = new google.maps.places.Autocomplete(input, {
+                fields: ['geometry', 'formatted_address', 'name']
+            });
+
+            autocomplete.addListener('place_changed', () => {
+                const place = autocomplete.getPlace();
+                if (!place.geometry || !place.geometry.location) {
+                    log('Destination has no geometry', 'err');
+                    return;
+                }
+
+                const loc = place.geometry.location;
+                destCoords = [loc.lng(), loc.lat()];
                 navBtn.disabled = false;
-                log('📍 Destination: ' + e.result.place_name);
+                log('📍 Destination: ' + (place.formatted_address || place.name || 'Destination'));
 
-                // Destination marker
-                if (window._destMarker) window._destMarker.remove();
-                window._destMarker = new mapboxgl.Marker({ color: '#ff4466' })
-                    .setLngLat(destCoords)
-                    .addTo(map);
+                if (destMarker) destMarker.setMap(null);
+                destMarker = new google.maps.Marker({
+                    map,
+                    position: loc,
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 6,
+                        fillColor: '#ff4466',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 2
+                    }
+                });
 
-                // Auto-preview route
                 if (currentPos) {
                     fetchAndDrawRoute(currentPos, destCoords, true);
-                }
-
-                // Fit map to show both origin & destination
-                if (currentPos) {
-                    map.fitBounds([currentPos, destCoords], {
-                        padding: { top: 100, bottom: 280, left: 40, right: 40 },
-                        maxZoom: 15
-                    });
+                    fitBoundsToRoute(currentPos, destCoords);
+                } else {
+                    map.panTo(loc);
+                    map.setZoom(14);
                 }
             });
+        }
 
-            // Geolocate control — auto-trigger on load
-            const geoCtrl = new mapboxgl.GeolocateControl({
-                positionOptions: { enableHighAccuracy: true },
-                trackUserLocation: true,
-                showUserHeading: true
+        function fitBoundsToRoute(origin, dest) {
+            const bounds = new google.maps.LatLngBounds();
+            bounds.extend({ lat: origin[1], lng: origin[0] });
+            bounds.extend({ lat: dest[1], lng: dest[0] });
+            map.fitBounds(bounds, { top: 100, bottom: 260, left: 40, right: 40 });
+        }
+
+        function getDirections(request) {
+            return new Promise((resolve, reject) => {
+                directionsService.route(request, (result, status) => {
+                    if (status === 'OK' && result) resolve(result);
+                    else reject(new Error(status || 'Directions failed'));
+                });
             });
-            map.addControl(geoCtrl, 'top-right');
-
-            map.on('load', () => {
-                log('🗺️ Map loaded');
-                // Auto-trigger location (shows blue dot immediately)
-                geoCtrl.trigger();
-                startGpsWatch();
-            });
-
-            log('Map initialized with token');
         }
 
         // Fetch route and draw it. If `previewOnly`, just draw without starting nav.
         async function fetchAndDrawRoute(origin, dest, previewOnly = false) {
             try {
-                const url = `https://api.mapbox.com/directions/v5/mapbox/driving/` +
-                    `${origin[0]},${origin[1]};${dest[0]},${dest[1]}` +
-                    `?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+                const request = {
+                    origin: { lat: origin[1], lng: origin[0] },
+                    destination: { lat: dest[1], lng: dest[0] },
+                    travelMode: google.maps.TravelMode.DRIVING,
+                };
 
-                const res = await fetch(url);
-                const data = await res.json();
-
-                if (!data.routes || !data.routes.length) {
+                const result = await getDirections(request);
+                if (!result.routes || !result.routes.length) {
                     log('No route found', 'err');
                     return null;
                 }
 
-                const route = data.routes[0];
-                drawRoute(route.geometry);
+                const route = result.routes[0];
+                drawRoute(route.overview_path);
 
                 if (previewOnly) {
-                    const mins = Math.round(route.duration / 60);
-                    const km = (route.distance / 1000).toFixed(1);
+                    let totalDist = 0;
+                    let totalDur = 0;
+                    for (const leg of route.legs) {
+                        totalDist += leg.distance?.value || 0;
+                        totalDur += leg.duration?.value || 0;
+                    }
+                    const mins = Math.max(1, Math.round(totalDur / 60));
+                    const km = (totalDist / 1000).toFixed(1);
                     navBtn.textContent = `Navigate (${km} km · ${mins} min)`;
                     log(`Route preview: ${km} km, ~${mins} min`);
                 }
@@ -768,39 +782,75 @@
             }
         }
 
-        // ═══════════════════════════════════════════════════════
-        //  COMPASS LOGIC
-        // ═══════════════════════════════════════════════════════
-
-        let deviceHeading = 0;
-
-        function handleCompass() {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response === 'granted') {
-                            window.addEventListener('deviceorientation', (e) => {
-                                deviceHeading = e.webkitCompassHeading || e.alpha || 0;
-                            });
-                        }
-                    })
-                    .catch(console.error);
-            } else {
-                window.addEventListener('deviceorientation', (e) => {
-                    deviceHeading = e.webkitCompassHeading || e.alpha || 0;
-                });
-            }
+        function drawRoute(path) {
+            if (routePolyline) routePolyline.setMap(null);
+            routePolyline = new google.maps.Polyline({
+                path,
+                geodesic: true,
+                strokeColor: '#00c8ff',
+                strokeOpacity: 0.85,
+                strokeWeight: 5
+            });
+            routePolyline.setMap(map);
         }
 
         // ═══════════════════════════════════════════════════════
         //  GPS
         // ═══════════════════════════════════════════════════════
 
+        function updateUserMarker(pos) {
+            if (!map || !window.google || !google.maps) return;
+            const latLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+
+            if (!userMarker) {
+                userMarker = new google.maps.Marker({
+                    map,
+                    position: latLng,
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 6,
+                        fillColor: '#00c8ff',
+                        fillOpacity: 1,
+                        strokeColor: '#ffffff',
+                        strokeWeight: 2
+                    }
+                });
+            } else {
+                userMarker.setPosition(latLng);
+            }
+
+            if (!accuracyCircle) {
+                accuracyCircle = new google.maps.Circle({
+                    map,
+                    center: latLng,
+                    radius: pos.coords.accuracy || 10,
+                    fillColor: '#00c8ff',
+                    fillOpacity: 0.12,
+                    strokeColor: '#00c8ff',
+                    strokeOpacity: 0.35,
+                    strokeWeight: 1
+                });
+            } else {
+                accuracyCircle.setCenter(latLng);
+                accuracyCircle.setRadius(pos.coords.accuracy || 10);
+            }
+
+            if (!hasCentered) {
+                map.setCenter(latLng);
+                map.setZoom(15);
+                hasCentered = true;
+            }
+        }
+
         function startGpsWatch() {
             if (!navigator.geolocation) { log('No GPS', 'err'); return; }
             gpsWatchId = navigator.geolocation.watchPosition(
                 (pos) => {
                     currentPos = [pos.coords.longitude, pos.coords.latitude];
+                    updateUserMarker(pos);
+                    if (destCoords && !routePolyline) {
+                        fetchAndDrawRoute(currentPos, destCoords, true);
+                    }
                     if (navigating) onGpsUpdate();
                 },
                 (err) => log('GPS error: ' + err.message, 'err'),
@@ -838,10 +888,6 @@
                 return;
             }
 
-            // Start Audio & Compass
-            // silentAudio.play().catch(e => console.log('Audio auto-play blocked')); // Assuming silentAudio is defined elsewhere
-            handleCompass();
-
             log('🧭 Starting navigation…');
             statusText.textContent = 'Calculating route…';
 
@@ -852,23 +898,29 @@
                 return;
             }
 
-            routeGeometry = route.geometry;
+            routeGeometry = {
+                type: 'LineString',
+                coordinates: route.overview_path.map(p => [p.lng(), p.lat()])
+            };
             routeSteps = [];
 
             // Flatten steps from all legs
             for (const leg of route.legs) {
                 for (const step of leg.steps) {
+                    const maneuver = (step.maneuver || 'straight').toLowerCase();
+                    const instruction = stripHtml(step.instructions || '');
                     routeSteps.push({
-                        maneuver: step.maneuver,
-                        name: step.name || '',
-                        distance: step.distance,
-                        duration: step.duration || 0,
-                        location: step.maneuver.location
+                        maneuver,
+                        name: instruction,
+                        distance: step.distance?.value || 0,
+                        location: [step.end_location.lng(), step.end_location.lat()]
                     });
                 }
             }
 
-            log(`Route: ${routeSteps.length} steps, ${(route.distance / 1000).toFixed(1)} km`);
+            let totalDist = 0;
+            for (const leg of route.legs) totalDist += leg.distance?.value || 0;
+            log(`Route: ${routeSteps.length} steps, ${(totalDist / 1000).toFixed(1)} km`);
 
             // Start nav mode
             navigating = true;
@@ -891,40 +943,61 @@
             $('destSection').style.display = 'block';
             statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
 
-            // Remove route layer
-            if (map.getLayer('route')) map.removeLayer('route');
-            if (map.getSource('route')) map.removeSource('route');
+            // Remove route preview
+            if (routePolyline) {
+                routePolyline.setMap(null);
+                routePolyline = null;
+            }
+            routeGeometry = null;
+            routeSteps = null;
 
             log('⏹ Navigation stopped');
-        }
-
-        function drawRoute(geometry) {
-            if (map.getLayer('route')) map.removeLayer('route');
-            if (map.getSource('route')) map.removeSource('route');
-
-            map.addSource('route', {
-                type: 'geojson',
-                data: { type: 'Feature', geometry: geometry }
-            });
-
-            map.addLayer({
-                id: 'route',
-                type: 'line',
-                source: 'route',
-                layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: {
-                    'line-color': '#00c8ff',
-                    'line-width': 5,
-                    'line-opacity': 0.8
-                }
-            }, 'road-label');
         }
 
         // ═══════════════════════════════════════════════════════
         //  SNAPPING ENGINE (Turf.js)
         // ═══════════════════════════════════════════════════════
 
-        async function onGpsUpdate() {
+        function maneuverToIconId(maneuver) {
+            const key = (maneuver || '').toLowerCase();
+            if (MANEUVER_MAP[key] !== undefined) return MANEUVER_MAP[key];
+            if (key.includes('right')) return 2;
+            if (key.includes('left')) return 1;
+            if (key.includes('uturn')) return 3;
+            return 0;
+        }
+
+        function buildPreviewPoints(routeLine, snapDist) {
+            const lineLength = turf.length(routeLine, { units: 'meters' });
+            if (!isFinite(lineLength) || lineLength <= 0) return { count: 0, points: [] };
+
+            const basePoint = turf.along(routeLine, snapDist, { units: 'meters' });
+            const aheadPoint = turf.along(routeLine, Math.min(snapDist + 10, lineLength), { units: 'meters' });
+            const heading = turf.bearing(basePoint, aheadPoint);
+            const lookahead = Math.min(PREVIEW_LOOKAHEAD, Math.max(0, lineLength - snapDist));
+            const step = PREVIEW_MAX_POINTS > 1 ? lookahead / (PREVIEW_MAX_POINTS - 1) : 0;
+            const points = [];
+
+            for (let i = 0; i < PREVIEW_MAX_POINTS; i++) {
+                const d = Math.min(snapDist + step * i, lineLength);
+                const p = turf.along(routeLine, d, { units: 'meters' });
+                const dist = turf.distance(basePoint, p, { units: 'meters' });
+                const bearing = turf.bearing(basePoint, p);
+                const rel = (bearing - heading) * Math.PI / 180;
+                const x = Math.sin(rel) * dist;
+                const y = Math.cos(rel) * dist;
+                const scale = PREVIEW_RANGE / PREVIEW_LOOKAHEAD;
+                let sx = Math.round(x * scale);
+                let sy = Math.round(y * scale);
+                sx = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sx));
+                sy = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sy));
+                points.push({ x: sx, y: sy });
+            }
+
+            return { count: points.length, points };
+        }
+
+        function onGpsUpdate() {
             if (!currentPos || !routeGeometry || !routeSteps || routeSteps.length === 0) return;
 
             const routeLine = turf.lineString(routeGeometry.coordinates);
@@ -936,7 +1009,6 @@
 
             // Find NEXT step: the one whose maneuver point we haven't passed yet
             let nextStepIdx = 0;
-            let accumDist = 0;
 
             for (let i = 0; i < routeSteps.length; i++) {
                 const stepPt = turf.point(routeSteps[i].location);
@@ -969,64 +1041,15 @@
             const distToTurn = turf.distance(pt, maneuverPt, { units: 'meters' });
 
             // Map maneuver type → icon_id
-            const modifier = nextStep.maneuver.modifier || '';
-            const mType = nextStep.maneuver.type || '';
-            let iconId = 0;
-
-            // Try combined type + modifier first
-            const combined = `${mType} ${modifier}`.trim().toLowerCase();
-            if (MANEUVER_MAP[combined] !== undefined) {
-                iconId = MANEUVER_MAP[combined];
-            } else if (MANEUVER_MAP[mType] !== undefined) {
-                iconId = MANEUVER_MAP[mType];
-            } else if (modifier.includes('right')) {
-                iconId = 2;
-            } else if (modifier.includes('left')) {
-                iconId = 1;
-            } else if (modifier.includes('uturn')) {
-                iconId = 3;
-            }
+            let iconId = maneuverToIconId(nextStep.maneuver);
 
             // Check for arrival
-            if (mType === 'arrive' || nextStepIdx === routeSteps.length - 1 && distToTurn < 50) {
+            if (nextStepIdx === routeSteps.length - 1 && distToTurn < 50) {
                 iconId = 4;
             }
 
-            const streetName = nextStep.name || nextStep.maneuver.instruction || '';
-
-            // Identify Current Street (Road we are currently on)
-            let currStreetName = 'Start';
-            if (nextStepIdx > 0 && routeSteps[nextStepIdx - 1]) {
-                currStreetName = routeSteps[nextStepIdx - 1].name || 'Road';
-            }
-
-            // Calculate ETA (Remaining duration)
-            let etaSeconds = 0;
-            if (nextStep) {
-                const frac = nextStep.distance > 0 ? (distToTurn / nextStep.distance) : 0;
-                etaSeconds += (nextStep.duration || 0) * frac;
-            }
-            // Sum remaining steps
-            for (let k = nextStepIdx + 1; k < routeSteps.length; k++) {
-                etaSeconds += routeSteps[k].duration || 0;
-            }
-
-            // Calculate Bearing (Relative to Device Heading)
-            // turf.bearing returns -180 to 180.
-            // mapbox bearing is 0-360?
-            // "deviceHeading" is 0-360 (North=0, East=90)
-            let relativeBearing = 0;
-            if (nextStep) {
-                // Bearing from User to Maneuver Point
-                const destPt = turf.point(nextStep.location);
-                const absBearing = turf.bearing(pt, destPt); // -180 to 180
-                const absBearingDeg = (absBearing + 360) % 360; // 0-360
-
-                // Relative = Target - Device
-                // Example: Target East (90), Device North (0) -> 90 (Right)
-                // Example: Target North (0), Device East (90) -> -90 (Left) -> 270
-                relativeBearing = (absBearingDeg - deviceHeading + 360) % 360;
-            }
+            const streetName = nextStep.name || '';
+            const preview = buildPreviewPoints(routeLine, snappedDist);
 
             // Update web UI
             navIcon.textContent = ICON_ARROWS[iconId] || '↑';
@@ -1039,41 +1062,39 @@
                 navUnit.textContent = 'm';
             }
 
-            // Send to ESP32 (Multiplexed)
-            await sendNavData(iconId, distToTurn, etaSeconds, relativeBearing);
-            await sendString(PKT_NEXT_STR, streetName);
-            await sendString(PKT_CURR_STR, currStreetName);
+            // Send to ESP32
+            sendNavPacket(iconId, distToTurn, streetName, preview);
         }
 
         // ═══════════════════════════════════════════════════════
-        //  TOKEN FLOW
+        //  API KEY FLOW
         // ═══════════════════════════════════════════════════════
 
-        const tokenOverlay = $('tokenOverlay');
-        const tokenInput = $('tokenInput');
-        const tokenBtn = $('tokenBtn');
+        const keyOverlay = $('keyOverlay');
+        const keyInput = $('keyInput');
+        const keyBtn = $('keyBtn');
 
-        function applyToken() {
-            const t = tokenInput.value.trim();
-            if (!t || !t.startsWith('pk.')) {
-                alert('Please enter a valid Mapbox token (starts with pk.)');
+        function applyKey() {
+            const k = keyInput.value.trim();
+            if (!k || k.length < 10) {
+                alert('Please enter a valid Google Maps API key (starts with AIza…)');
                 return;
             }
-            MAPBOX_TOKEN = t;
-            localStorage.setItem('mapbox_token', t);
-            tokenOverlay.classList.add('hidden');
-            initMap();
+            GOOGLE_MAPS_KEY = k;
+            localStorage.setItem('gmaps_key', k);
+            keyOverlay.classList.add('hidden');
+            loadGoogleMaps(k);
         }
 
-        tokenBtn.addEventListener('click', applyToken);
-        tokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyToken(); });
+        keyBtn.addEventListener('click', applyKey);
+        keyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyKey(); });
 
-        // Auto-init if token already saved
-        if (MAPBOX_TOKEN && MAPBOX_TOKEN.startsWith('pk.')) {
-            tokenOverlay.classList.add('hidden');
-            initMap();
+        // Auto-init if key already saved
+        if (GOOGLE_MAPS_KEY && GOOGLE_MAPS_KEY.length > 10) {
+            keyOverlay.classList.add('hidden');
+            loadGoogleMaps(GOOGLE_MAPS_KEY);
         } else {
-            tokenInput.focus();
+            keyInput.focus();
         }
 
         // ═══════════════════════════════════════════════════════
