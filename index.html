@@ -1216,14 +1216,20 @@
             }
         }
 
-        function buildPreviewPoints(routeLine, snapDist) {
+        function buildPreviewPoints(routeLine, snapDist, distToTurn) {
             const lineLength = turf.length(routeLine, { units: 'meters' });
             if (!isFinite(lineLength) || lineLength <= 0) return { count: 0, points: [] };
 
             const basePoint = turf.along(routeLine, snapDist, { units: 'meters' });
             const aheadPoint = turf.along(routeLine, Math.min(snapDist + 10, lineLength), { units: 'meters' });
             const heading = turf.bearing(basePoint, aheadPoint);
-            const lookahead = Math.min(PREVIEW_LOOKAHEAD, Math.max(0, lineLength - snapDist));
+            const remaining = Math.max(0, lineLength - snapDist);
+            let lookahead = Math.min(PREVIEW_LOOKAHEAD, remaining);
+            if (Number.isFinite(distToTurn)) {
+                const bonus = distToTurn < 120 ? 220 : 60;
+                const target = distToTurn + bonus;
+                lookahead = Math.min(PREVIEW_LOOKAHEAD, Math.max(120, Math.min(target, remaining)));
+            }
             const step = PREVIEW_MAX_POINTS > 1 ? lookahead / (PREVIEW_MAX_POINTS - 1) : 0;
             const points = [];
 
@@ -1299,7 +1305,7 @@
             }
 
             const streetName = nextStep.name || '';
-            const preview = buildPreviewPoints(routeLine, snappedDist);
+            const preview = buildPreviewPoints(routeLine, snappedDist, distToTurn);
             const headingToSend = getHeadingToSend();
             lastNavPayload = { iconId, distMeters: distToTurn, streetName, preview };
 
