@@ -449,15 +449,27 @@
             'TURN_LEFT': 1,
             'SHARP_LEFT': 1,
             'EXIT_LEFT': 1,
+            'ROUNDABOUT_LEFT': 1,
             'KEEP_RIGHT': 2,
             'BEAR_RIGHT': 2,
             'TURN_RIGHT': 2,
             'SHARP_RIGHT': 2,
             'EXIT_RIGHT': 2,
+            'ROUNDABOUT_RIGHT': 2,
             'MAKE_UTURN': 3,
+            'UTURN_LEFT': 3,
+            'UTURN_RIGHT': 3,
             'ARRIVE': 4,
             'ARRIVE_LEFT': 4,
             'ARRIVE_RIGHT': 4,
+            'ENTER_MOTORWAY': 0,
+            'EXIT_MOTORWAY': 0,
+            'TAKE_EXIT': 0,
+            'MERGE': 0,
+            'ROUNDABOUT_CROSS': 0,
+            'FERRY': 0,
+            'RAIL_FERRY': 0,
+            'PARKING': 0
         };
 
         const ICON_ARROWS = ['↑', '←', '→', '↩', '✓'];
@@ -695,10 +707,20 @@
         // ═══════════════════════════════════════════════════════
 
         function initMap() {
+            if (map) {
+                map.remove();
+                map = null;
+            }
             map = L.map('map', {
                 zoomControl: false,
                 attributionControl: true
             });
+
+            userMarker = null;
+            accuracyCircle = null;
+            routePolyline = null;
+            destMarker = null;
+            hasCentered = false;
 
             const tileUrl = `https://{s}.api.tomtom.com/map/1/tile/basic/night/{z}/{x}/{y}.png?key=${encodeURIComponent(TOMTOM_KEY)}`;
             L.tileLayer(tileUrl, {
@@ -728,10 +750,12 @@
             destInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
+                    const q = destInput.value.trim();
+                    if (!q) return;
                     if (suggestionResults.length > 0) {
                         selectSuggestion(suggestionResults[0]);
                     } else {
-                        fetchSuggestions(destInput.value.trim(), true);
+                        fetchSuggestions(q, true);
                     }
                 }
             });
@@ -854,6 +878,10 @@
         // Fetch route and draw it. If `previewOnly`, just draw without starting nav.
         async function fetchAndDrawRoute(origin, dest, previewOnly = false) {
             try {
+                if (!TOMTOM_KEY) {
+                    log('Missing TomTom API key', 'err');
+                    return null;
+                }
                 const params = new URLSearchParams({
                     key: TOMTOM_KEY,
                     travelMode: 'car',
@@ -1015,6 +1043,16 @@
                     name: stripHtml(name),
                     location: [instr.point.longitude, instr.point.latitude],
                     turnAngle: instr.turnAngleInDecimalDegrees || 0
+                });
+            }
+
+            if (routeSteps.length === 0 && result.geometry.length) {
+                const last = result.geometry[result.geometry.length - 1];
+                routeSteps.push({
+                    maneuver: 'ARRIVE',
+                    name: 'Destination',
+                    location: last,
+                    turnAngle: 0
                 });
             }
 
