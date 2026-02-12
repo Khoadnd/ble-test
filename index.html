@@ -5,9 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>MotoHUD Navigator</title>
-    <meta name="description" content="Motorcycle HUD Navigation Brain — Google Maps + BLE">
+    <meta name="description" content="Motorcycle HUD Navigation Brain — TomTom + BLE">
 
-    <!-- Google Maps JS API is loaded dynamically after API key input -->
+    <!-- Leaflet (map rendering) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Turf.js -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
 
@@ -171,6 +173,45 @@
             color: var(--text-dim);
         }
 
+        .dest-suggestions {
+            display: none;
+            margin-top: 8px;
+            background: var(--bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+            max-height: 180px;
+            overflow-y: auto;
+        }
+
+        .dest-suggestions.open {
+            display: block;
+        }
+
+        .suggestion-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .suggestion-item:last-child {
+            border-bottom: none;
+        }
+
+        .suggestion-item:hover {
+            background: var(--accent-dim);
+        }
+
+        .suggestion-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .suggestion-sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
         /* ── Buttons ─────────────────────────────── */
         .btn {
             width: 100%;
@@ -314,6 +355,16 @@
             border-color: var(--accent);
         }
 
+        .leaflet-control-attribution {
+            background: rgba(10, 14, 26, 0.65);
+            color: var(--text-dim);
+            font-size: 10px;
+        }
+
+        .leaflet-control-attribution a {
+            color: var(--text-dim);
+        }
+
     </style>
 </head>
 
@@ -322,9 +373,9 @@
     <!-- ════ TOKEN OVERLAY ════ -->
     <div class="token-overlay" id="keyOverlay">
         <div class="token-card">
-            <h2>🗺️ Google Maps API Key</h2>
-            <p>Paste your Google Maps JavaScript API key. It will be saved in your browser for next time.</p>
-            <input type="text" id="keyInput" placeholder="AIza..." autocomplete="off" spellcheck="false">
+            <h2>🗺️ TomTom API Key</h2>
+            <p>Paste your TomTom API key. It will be saved in your browser for next time.</p>
+            <input type="text" id="keyInput" placeholder="TomTomKey..." autocomplete="off" spellcheck="false">
             <button class="btn btn-connect" id="keyBtn">Start Map</button>
         </div>
     </div>
@@ -355,6 +406,7 @@
         <!-- Destination search -->
         <div class="dest-section" id="destSection">
             <input class="dest-input" id="destInput" type="text" placeholder="Where to?" autocomplete="off">
+            <div class="dest-suggestions" id="destSuggestions"></div>
         </div>
 
         <!-- Buttons -->
@@ -378,7 +430,7 @@
         //  CONFIGURATION
         // ═══════════════════════════════════════════════════════
 
-        let GOOGLE_MAPS_KEY = localStorage.getItem('gmaps_key') || '';
+        let TOMTOM_KEY = localStorage.getItem('tomtom_key') || '';
 
         // BLE UUIDs — must match ESP32 firmware
         const BLE_SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
@@ -390,26 +442,22 @@
 
         // Maneuver icon map → icon_id for ESP32
         const MANEUVER_MAP = {
-            'straight': 0,
-            'turn-left': 1,
-            'turn-right': 2,
-            'turn-slight-left': 1,
-            'turn-slight-right': 2,
-            'turn-sharp-left': 1,
-            'turn-sharp-right': 2,
-            'uturn-left': 3,
-            'uturn-right': 3,
-            'ramp-left': 1,
-            'ramp-right': 2,
-            'merge': 0,
-            'fork-left': 1,
-            'fork-right': 2,
-            'keep-left': 1,
-            'keep-right': 2,
-            'roundabout-left': 2,
-            'roundabout-right': 2,
-            'ferry': 0,
-            'ferry-train': 0,
+            'DEPART': 0,
+            'STRAIGHT': 0,
+            'KEEP_LEFT': 1,
+            'BEAR_LEFT': 1,
+            'TURN_LEFT': 1,
+            'SHARP_LEFT': 1,
+            'EXIT_LEFT': 1,
+            'KEEP_RIGHT': 2,
+            'BEAR_RIGHT': 2,
+            'TURN_RIGHT': 2,
+            'SHARP_RIGHT': 2,
+            'EXIT_RIGHT': 2,
+            'MAKE_UTURN': 3,
+            'ARRIVE': 4,
+            'ARRIVE_LEFT': 4,
+            'ARRIVE_RIGHT': 4,
         };
 
         const ICON_ARROWS = ['↑', '←', '→', '↩', '✓'];
@@ -423,7 +471,6 @@
 
         let bleDevice = null, bleChar = null, bleConnected = false;
         let map, userMarker, accuracyCircle, gpsWatchId = null;
-        let directionsService = null;
         let routePolyline = null;
         let destMarker = null;
         let hasCentered = false;
@@ -433,6 +480,9 @@
         let destCoords = null;
         let lastSendTime = 0;
         let isWriting = false;
+        let suggestionResults = [];
+        let suggestTimer = null;
+        let suggestAbort = null;
 
         // Background audio keep-alive
         let silentAudio = new Audio();
@@ -454,6 +504,8 @@
         const navStreet = $('navStreet');
         const navDist = $('navDist');
         const navUnit = $('navUnit');
+        const destInput = $('destInput');
+        const destSuggestions = $('destSuggestions');
         const logPanel = $('logPanel');
         const logToggle = $('logToggle');
 
@@ -639,159 +691,216 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  MAP — Google Maps JS API (loaded after API key)
+        //  MAP — TomTom + Leaflet
         // ═══════════════════════════════════════════════════════
 
-        function loadGoogleMaps(key) {
-            if (!key) return;
-            if (window.google && window.google.maps) {
-                initMap();
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=places&callback=initMap`;
-            script.async = true;
-            script.defer = true;
-            script.onerror = () => {
-                log('Google Maps failed to load. Check API key + network.', 'err');
-                keyOverlay.classList.remove('hidden');
-            };
-            document.head.appendChild(script);
-        }
-
-        window.initMap = initMap;
-
         function initMap() {
-            map = new google.maps.Map(document.getElementById('map'), {
-                center: { lat: 10.7769, lng: 106.7009 },
-                zoom: 13,
-                mapTypeControl: false,
-                streetViewControl: false,
-                fullscreenControl: false,
-                gestureHandling: 'greedy',
-                styles: [
-                    { elementType: 'geometry', stylers: [{ color: '#0b0f1c' }] },
-                    { elementType: 'labels.text.stroke', stylers: [{ color: '#0b0f1c' }] },
-                    { elementType: 'labels.text.fill', stylers: [{ color: '#8c94b8' }] },
-                    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-                    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1b2138' }] },
-                    { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#2a3356' }] },
-                    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#05080f' }] },
-                ]
+            map = L.map('map', {
+                zoomControl: false,
+                attributionControl: true
             });
 
-            directionsService = new google.maps.DirectionsService();
+            const tileUrl = `https://{s}.api.tomtom.com/map/1/tile/basic/night/{z}/{x}/{y}.png?key=${encodeURIComponent(TOMTOM_KEY)}`;
+            L.tileLayer(tileUrl, {
+                maxZoom: 22,
+                subdomains: 'abcd',
+                tileSize: 256,
+                attribution: '© TomTom'
+            }).addTo(map);
+
+            map.setView([10.7769, 106.7009], 13);
             setupAutocomplete();
             startGpsWatch();
             log('🗺️ Map initialized');
         }
 
         function setupAutocomplete() {
-            const input = $('destInput');
-            const autocomplete = new google.maps.places.Autocomplete(input, {
-                fields: ['geometry', 'formatted_address', 'name']
-            });
-
-            autocomplete.addListener('place_changed', () => {
-                const place = autocomplete.getPlace();
-                if (!place.geometry || !place.geometry.location) {
-                    log('Destination has no geometry', 'err');
+            destInput.addEventListener('input', () => {
+                const q = destInput.value.trim();
+                clearTimeout(suggestTimer);
+                if (q.length < 2) {
+                    renderSuggestions([]);
                     return;
                 }
+                suggestTimer = setTimeout(() => fetchSuggestions(q), 250);
+            });
 
-                const loc = place.geometry.location;
-                destCoords = [loc.lng(), loc.lat()];
-                navBtn.disabled = false;
-                log('📍 Destination: ' + (place.formatted_address || place.name || 'Destination'));
-
-                if (destMarker) destMarker.setMap(null);
-                destMarker = new google.maps.Marker({
-                    map,
-                    position: loc,
-                    icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 6,
-                        fillColor: '#ff4466',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2
+            destInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (suggestionResults.length > 0) {
+                        selectSuggestion(suggestionResults[0]);
+                    } else {
+                        fetchSuggestions(destInput.value.trim(), true);
                     }
-                });
-
-                if (currentPos) {
-                    fetchAndDrawRoute(currentPos, destCoords, true);
-                    fitBoundsToRoute(currentPos, destCoords);
-                } else {
-                    map.panTo(loc);
-                    map.setZoom(14);
                 }
             });
+
+            destInput.addEventListener('blur', () => {
+                setTimeout(() => renderSuggestions([]), 150);
+            });
+
+            destSuggestions.addEventListener('click', (e) => {
+                const item = e.target.closest('.suggestion-item');
+                if (!item) return;
+                const idx = Number(item.dataset.idx);
+                const result = suggestionResults[idx];
+                if (result) selectSuggestion(result);
+            });
+        }
+
+        async function fetchSuggestions(query, pickFirst = false) {
+            if (!TOMTOM_KEY || !query) return;
+
+            if (suggestAbort) suggestAbort.abort();
+            suggestAbort = new AbortController();
+
+            try {
+                const params = new URLSearchParams({
+                    key: TOMTOM_KEY,
+                    typeahead: 'true',
+                    limit: '6',
+                    countrySet: 'VN'
+                });
+                if (currentPos) {
+                    params.set('lat', currentPos[1].toFixed(6));
+                    params.set('lon', currentPos[0].toFixed(6));
+                }
+
+                const url = `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?${params.toString()}`;
+                const res = await fetch(url, { signal: suggestAbort.signal });
+                const data = await res.json();
+                const results = data.results || [];
+                if (pickFirst && results.length > 0) {
+                    selectSuggestion(results[0]);
+                    return;
+                }
+                renderSuggestions(results);
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    log('Search error: ' + e.message, 'err');
+                }
+            }
+        }
+
+        function renderSuggestions(results) {
+            suggestionResults = results || [];
+            destSuggestions.innerHTML = '';
+            if (!suggestionResults.length) {
+                destSuggestions.classList.remove('open');
+                return;
+            }
+
+            suggestionResults.forEach((r, idx) => {
+                const title = r.poi?.name || r.address?.freeformAddress || 'Result';
+                const sub = r.address?.freeformAddress || r.address?.municipality || r.address?.countrySubdivision || '';
+                const item = document.createElement('div');
+                item.className = 'suggestion-item';
+                item.dataset.idx = String(idx);
+
+                const t = document.createElement('div');
+                t.className = 'suggestion-title';
+                t.textContent = title;
+                item.appendChild(t);
+
+                if (sub && sub !== title) {
+                    const s = document.createElement('div');
+                    s.className = 'suggestion-sub';
+                    s.textContent = sub;
+                    item.appendChild(s);
+                }
+
+                destSuggestions.appendChild(item);
+            });
+
+            destSuggestions.classList.add('open');
+        }
+
+        function selectSuggestion(result) {
+            if (!result || !result.position) return;
+            const { lat, lon } = result.position;
+            destCoords = [lon, lat];
+            const label = result.address?.freeformAddress || result.poi?.name || 'Destination';
+            destInput.value = label;
+            navBtn.disabled = false;
+            renderSuggestions([]);
+            log('📍 Destination: ' + label);
+
+            if (destMarker) map.removeLayer(destMarker);
+            destMarker = L.circleMarker([lat, lon], {
+                radius: 6,
+                color: '#ffffff',
+                weight: 2,
+                fillColor: '#ff4466',
+                fillOpacity: 1
+            }).addTo(map);
+
+            if (currentPos) {
+                fetchAndDrawRoute(currentPos, destCoords, true);
+                fitBoundsToRoute(currentPos, destCoords);
+            } else {
+                map.setView([lat, lon], 14);
+            }
         }
 
         function fitBoundsToRoute(origin, dest) {
-            const bounds = new google.maps.LatLngBounds();
-            bounds.extend({ lat: origin[1], lng: origin[0] });
-            bounds.extend({ lat: dest[1], lng: dest[0] });
-            map.fitBounds(bounds, { top: 100, bottom: 260, left: 40, right: 40 });
-        }
-
-        function getDirections(request) {
-            return new Promise((resolve, reject) => {
-                directionsService.route(request, (result, status) => {
-                    if (status === 'OK' && result) resolve(result);
-                    else reject(new Error(status || 'Directions failed'));
-                });
-            });
+            const bounds = L.latLngBounds(
+                [origin[1], origin[0]],
+                [dest[1], dest[0]]
+            );
+            map.fitBounds(bounds, { padding: [40, 160] });
         }
 
         // Fetch route and draw it. If `previewOnly`, just draw without starting nav.
         async function fetchAndDrawRoute(origin, dest, previewOnly = false) {
             try {
-                const request = {
-                    origin: { lat: origin[1], lng: origin[0] },
-                    destination: { lat: dest[1], lng: dest[0] },
-                    travelMode: google.maps.TravelMode.DRIVING,
-                };
+                const params = new URLSearchParams({
+                    key: TOMTOM_KEY,
+                    travelMode: 'car',
+                    instructionsType: 'coded',
+                    language: 'en-US',
+                    routeRepresentation: 'polyline',
+                    computeTravelTimeFor: 'all',
+                    traffic: 'true'
+                });
+                const url = `https://api.tomtom.com/routing/1/calculateRoute/${origin[1]},${origin[0]}:${dest[1]},${dest[0]}/json?${params.toString()}`;
 
-                const result = await getDirections(request);
-                if (!result.routes || !result.routes.length) {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (!data.routes || !data.routes.length) {
                     log('No route found', 'err');
                     return null;
                 }
 
-                const route = result.routes[0];
-                drawRoute(route.overview_path);
+                const route = data.routes[0];
+                const leg = route.legs?.[0];
+                const points = leg?.points || [];
+                const geometry = points.map(p => [p.longitude, p.latitude]);
+                drawRoute(geometry);
 
                 if (previewOnly) {
-                    let totalDist = 0;
-                    let totalDur = 0;
-                    for (const leg of route.legs) {
-                        totalDist += leg.distance?.value || 0;
-                        totalDur += leg.duration?.value || 0;
-                    }
-                    const mins = Math.max(1, Math.round(totalDur / 60));
-                    const km = (totalDist / 1000).toFixed(1);
+                    const meters = route.summary?.lengthInMeters || 0;
+                    const mins = Math.max(1, Math.round((route.summary?.travelTimeInSeconds || 0) / 60));
+                    const km = (meters / 1000).toFixed(1);
                     navBtn.textContent = `Navigate (${km} km · ${mins} min)`;
                     log(`Route preview: ${km} km, ~${mins} min`);
                 }
 
-                return route;
+                return { route, geometry };
             } catch (e) {
                 log('Route error: ' + e.message, 'err');
                 return null;
             }
         }
 
-        function drawRoute(path) {
-            if (routePolyline) routePolyline.setMap(null);
-            routePolyline = new google.maps.Polyline({
-                path,
-                geodesic: true,
-                strokeColor: '#00c8ff',
-                strokeOpacity: 0.85,
-                strokeWeight: 5
-            });
-            routePolyline.setMap(map);
+        function drawRoute(coords) {
+            if (routePolyline) map.removeLayer(routePolyline);
+            const latLngs = coords.map(c => [c[1], c[0]]);
+            routePolyline = L.polyline(latLngs, {
+                color: '#00c8ff',
+                weight: 5,
+                opacity: 0.85
+            }).addTo(map);
         }
 
         // ═══════════════════════════════════════════════════════
@@ -799,45 +908,37 @@
         // ═══════════════════════════════════════════════════════
 
         function updateUserMarker(pos) {
-            if (!map || !window.google || !google.maps) return;
-            const latLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            if (!map) return;
+            const latLng = [pos.coords.latitude, pos.coords.longitude];
 
             if (!userMarker) {
-                userMarker = new google.maps.Marker({
-                    map,
-                    position: latLng,
-                    icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 6,
-                        fillColor: '#00c8ff',
-                        fillOpacity: 1,
-                        strokeColor: '#ffffff',
-                        strokeWeight: 2
-                    }
-                });
+                userMarker = L.circleMarker(latLng, {
+                    radius: 6,
+                    color: '#ffffff',
+                    weight: 2,
+                    fillColor: '#00c8ff',
+                    fillOpacity: 1
+                }).addTo(map);
             } else {
-                userMarker.setPosition(latLng);
+                userMarker.setLatLng(latLng);
             }
 
             if (!accuracyCircle) {
-                accuracyCircle = new google.maps.Circle({
-                    map,
-                    center: latLng,
+                accuracyCircle = L.circle(latLng, {
                     radius: pos.coords.accuracy || 10,
+                    color: '#00c8ff',
+                    weight: 1,
+                    opacity: 0.35,
                     fillColor: '#00c8ff',
-                    fillOpacity: 0.12,
-                    strokeColor: '#00c8ff',
-                    strokeOpacity: 0.35,
-                    strokeWeight: 1
-                });
+                    fillOpacity: 0.12
+                }).addTo(map);
             } else {
-                accuracyCircle.setCenter(latLng);
+                accuracyCircle.setLatLng(latLng);
                 accuracyCircle.setRadius(pos.coords.accuracy || 10);
             }
 
             if (!hasCentered) {
-                map.setCenter(latLng);
-                map.setZoom(15);
+                map.setView(latLng, 15);
                 hasCentered = true;
             }
         }
@@ -891,35 +992,33 @@
             log('🧭 Starting navigation…');
             statusText.textContent = 'Calculating route…';
 
-            const route = await fetchAndDrawRoute(currentPos, destCoords, false);
-            if (!route) {
+            const result = await fetchAndDrawRoute(currentPos, destCoords, false);
+            if (!result) {
                 alert('No route found');
                 statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
                 return;
             }
 
+            const route = result.route;
             routeGeometry = {
                 type: 'LineString',
-                coordinates: route.overview_path.map(p => [p.lng(), p.lat()])
+                coordinates: result.geometry
             };
             routeSteps = [];
 
-            // Flatten steps from all legs
-            for (const leg of route.legs) {
-                for (const step of leg.steps) {
-                    const maneuver = (step.maneuver || 'straight').toLowerCase();
-                    const instruction = stripHtml(step.instructions || '');
-                    routeSteps.push({
-                        maneuver,
-                        name: instruction,
-                        distance: step.distance?.value || 0,
-                        location: [step.end_location.lng(), step.end_location.lat()]
-                    });
-                }
+            const instructions = route.guidance?.instructions || [];
+            for (const instr of instructions) {
+                if (!instr.point) continue;
+                const name = instr.street || instr.signpostText || instr.roadNumbers?.[0] || instr.message || '';
+                routeSteps.push({
+                    maneuver: instr.maneuver || 'STRAIGHT',
+                    name: stripHtml(name),
+                    location: [instr.point.longitude, instr.point.latitude],
+                    turnAngle: instr.turnAngleInDecimalDegrees || 0
+                });
             }
 
-            let totalDist = 0;
-            for (const leg of route.legs) totalDist += leg.distance?.value || 0;
+            const totalDist = route.summary?.lengthInMeters || 0;
             log(`Route: ${routeSteps.length} steps, ${(totalDist / 1000).toFixed(1)} km`);
 
             // Start nav mode
@@ -945,7 +1044,7 @@
 
             // Remove route preview
             if (routePolyline) {
-                routePolyline.setMap(null);
+                map.removeLayer(routePolyline);
                 routePolyline = null;
             }
             routeGeometry = null;
@@ -958,12 +1057,12 @@
         //  SNAPPING ENGINE (Turf.js)
         // ═══════════════════════════════════════════════════════
 
-        function maneuverToIconId(maneuver) {
-            const key = (maneuver || '').toLowerCase();
+        function maneuverToIconId(step) {
+            const key = (step?.maneuver || '').toUpperCase();
             if (MANEUVER_MAP[key] !== undefined) return MANEUVER_MAP[key];
-            if (key.includes('right')) return 2;
-            if (key.includes('left')) return 1;
-            if (key.includes('uturn')) return 3;
+            const angle = step?.turnAngle || 0;
+            if (angle > 15) return 2;
+            if (angle < -15) return 1;
             return 0;
         }
 
@@ -1041,10 +1140,11 @@
             const distToTurn = turf.distance(pt, maneuverPt, { units: 'meters' });
 
             // Map maneuver type → icon_id
-            let iconId = maneuverToIconId(nextStep.maneuver);
+            let iconId = maneuverToIconId(nextStep);
 
             // Check for arrival
-            if (nextStepIdx === routeSteps.length - 1 && distToTurn < 50) {
+            const maneuverKey = (nextStep.maneuver || '').toUpperCase();
+            if (maneuverKey.startsWith('ARRIVE') || (nextStepIdx === routeSteps.length - 1 && distToTurn < 50)) {
                 iconId = 4;
             }
 
@@ -1077,22 +1177,22 @@
         function applyKey() {
             const k = keyInput.value.trim();
             if (!k || k.length < 10) {
-                alert('Please enter a valid Google Maps API key (starts with AIza…)');
+                alert('Please enter a valid TomTom API key');
                 return;
             }
-            GOOGLE_MAPS_KEY = k;
-            localStorage.setItem('gmaps_key', k);
+            TOMTOM_KEY = k;
+            localStorage.setItem('tomtom_key', k);
             keyOverlay.classList.add('hidden');
-            loadGoogleMaps(k);
+            initMap();
         }
 
         keyBtn.addEventListener('click', applyKey);
         keyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyKey(); });
 
         // Auto-init if key already saved
-        if (GOOGLE_MAPS_KEY && GOOGLE_MAPS_KEY.length > 10) {
+        if (TOMTOM_KEY && TOMTOM_KEY.length > 10) {
             keyOverlay.classList.add('hidden');
-            loadGoogleMaps(GOOGLE_MAPS_KEY);
+            initMap();
         } else {
             keyInput.focus();
         }
