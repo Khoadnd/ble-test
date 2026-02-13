@@ -1539,7 +1539,7 @@
             }
 
             try {
-                const url = `https://api.tomtom.com/map/1/tile/basic/night/${MAP_ZOOM}/${tile.x}/${tile.y}.pbf?key=${encodeURIComponent(TOMTOM_KEY)}`;
+                const url = `https://api.tomtom.com/map/1/tile/basic/main/${MAP_ZOOM}/${tile.x}/${tile.y}.pbf?key=${encodeURIComponent(TOMTOM_KEY)}`;
                 const res = await fetch(url);
                 if (!res.ok) return [];
                 const buf = await res.arrayBuffer();
