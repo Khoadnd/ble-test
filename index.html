@@ -520,7 +520,10 @@
         let lastMapPos = null;
         let lastMapHeading = null;
         let lastMapSendAt = 0;
+        let pendingMapSegments = null;
+        let mapFlushTimer = null;
         let tileCache = new Map();
+        let lastTileLines = null;
         let currentPos = null;
         let routeGeometry = null, routeSteps = null;
         let navigating = false, navTimer = null;
@@ -642,6 +645,12 @@
         function onBleDisconnect() {
             bleConnected = false;
             bleChar = null;
+            lastTileLines = null;
+            pendingMapSegments = null;
+            if (mapFlushTimer) {
+                clearTimeout(mapFlushTimer);
+                mapFlushTimer = null;
+            }
             bleIndicator.classList.remove('connected');
             statusText.textContent = 'Disconnected — tap Connect';
             connectBtn.textContent = '🔵 Connect to MotoHUD';
@@ -761,13 +770,55 @@
                 log('Send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
+                flushPendingMapPacket();
             }
         }
 
+        function cloneMapSegments(segments) {
+            if (!Array.isArray(segments)) return [];
+            return segments.map(seg => Array.isArray(seg)
+                ? seg.map(pt => ({
+                    x: Math.max(-128, Math.min(127, Math.round(pt?.x ?? 0))),
+                    y: Math.max(-128, Math.min(127, Math.round(pt?.y ?? 0)))
+                }))
+                : []);
+        }
+
+        function scheduleMapFlush(delayMs = 80) {
+            if (mapFlushTimer) return;
+            mapFlushTimer = setTimeout(() => {
+                mapFlushTimer = null;
+                flushPendingMapPacket();
+            }, Math.max(0, delayMs));
+        }
+
+        async function flushPendingMapPacket() {
+            if (!pendingMapSegments || !bleChar || !bleConnected) return;
+            if (isWriting) {
+                scheduleMapFlush(80);
+                return;
+            }
+            const queued = pendingMapSegments;
+            pendingMapSegments = null;
+            await sendMapPacket(queued);
+        }
+
         async function sendMapPacket(segments) {
-            if (!bleChar || !bleConnected || isWriting) return;
+            if (!bleChar || !bleConnected) return;
+            if (isWriting) {
+                pendingMapSegments = cloneMapSegments(segments);
+                scheduleMapFlush(80);
+                return;
+            }
+
             const now = Date.now();
-            if (now - lastMapSendAt < 500) return;
+            const minInterval = 500;
+            const elapsed = now - lastMapSendAt;
+            if (elapsed < minInterval) {
+                pendingMapSegments = cloneMapSegments(segments);
+                scheduleMapFlush(minInterval - elapsed + 10);
+                return;
+            }
             lastMapSendAt = now;
 
             isWriting = true;
@@ -799,6 +850,9 @@
                 log('Map send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
+                if (pendingMapSegments) {
+                    scheduleMapFlush(0);
+                }
             }
         }
 
@@ -1214,6 +1268,12 @@
 
         function stopNavigation() {
             navigating = false;
+            lastTileLines = null;
+            pendingMapSegments = null;
+            if (mapFlushTimer) {
+                clearTimeout(mapFlushTimer);
+                mapFlushTimer = null;
+            }
             navInfo.classList.remove('active');
             navBtn.style.display = 'block';
             navBtn.textContent = 'Navigate';
@@ -1606,6 +1666,7 @@
         async function maybeUpdateMapBackground(headingDeg) {
             if (!navigating || !currentPos || isRerouting) return;
             const now = Date.now();
+            const elapsedSinceUpdate = now - lastMapUpdateAt;
             const moved = distanceMeters(lastMapPos, currentPos);
             const headingDelta = lastMapHeading === null
                 ? 360
@@ -1613,15 +1674,20 @@
 
             if (moved < MAP_UPDATE_DIST_M &&
                 headingDelta < MAP_UPDATE_HEADING_DEG &&
-                now - lastMapUpdateAt < MAP_UPDATE_MS) {
+                elapsedSinceUpdate < MAP_UPDATE_MS) {
                 return;
             }
 
             lastMapUpdateAt = now;
-            lastMapPos = [...currentPos];
             lastMapHeading = headingDeg;
 
-            const lines = await getVectorTileLines(currentPos[0], currentPos[1]);
+            const shouldRefetchLines = !lastTileLines || moved >= MAP_UPDATE_DIST_M || elapsedSinceUpdate >= MAP_UPDATE_MS;
+            if (shouldRefetchLines) {
+                lastTileLines = await getVectorTileLines(currentPos[0], currentPos[1]);
+                lastMapPos = [...currentPos];
+            }
+
+            const lines = Array.isArray(lastTileLines) ? lastTileLines : [];
             const originPt = turf.point(currentPos);
             const segments = [];
             for (const line of lines) {
