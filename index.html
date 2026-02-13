@@ -483,7 +483,8 @@
         const PACKET_TYPE_MAP = 1;
         const NAV_CURRENT_BYTES = 28;
         const NAV_NEXT_BYTES = 28;
-        const MAP_SEG_MAX = 9;
+        const MAP_SEG_TOTAL = 15;
+        const MAP_SEG_PAGE = 7;
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
         const MAP_RADIUS_M = 320;
@@ -688,10 +689,12 @@
         //
         //  MapPacket (type = 1):
         //    uint8  packet_type
+        //    uint8  page_index
+        //    uint8  page_count
         //    uint8  segment_count
-        //    uint8  segment_counts[9]
-        //    int8   segment_xy[216] (9 segments x 12 points x 2)
-        //  Total: 227 bytes
+        //    uint8  segment_counts[7]
+        //    int8   segment_xy[168] (7 segments x 12 points x 2)
+        //  Total: 179 bytes per page
         // ═══════════════════════════════════════════════════════
 
         // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
@@ -736,10 +739,12 @@
         const NAV_PACKET_SIZE = NAV_HEADING_OFFSET + 2;
 
         const MAP_TYPE_OFFSET = 0;
-        const MAP_COUNT_OFFSET = 1;
-        const MAP_COUNTS_OFFSET = 2;
-        const MAP_POINTS_OFFSET = MAP_COUNTS_OFFSET + MAP_SEG_MAX;
-        const MAP_PACKET_SIZE = MAP_POINTS_OFFSET + (MAP_SEG_MAX * MAP_PTS_MAX * 2);
+        const MAP_PAGE_INDEX_OFFSET = 1;
+        const MAP_PAGE_COUNT_OFFSET = 2;
+        const MAP_COUNT_OFFSET = 3;
+        const MAP_COUNTS_OFFSET = 4;
+        const MAP_POINTS_OFFSET = MAP_COUNTS_OFFSET + MAP_SEG_PAGE;
+        const MAP_PACKET_SIZE = MAP_POINTS_OFFSET + (MAP_SEG_PAGE * MAP_PTS_MAX * 2);
 
         function scheduleNavFlush(delayMs = 30) {
             if (navFlushTimer) return;
@@ -877,29 +882,40 @@
 
             isWriting = true;
             try {
-                const buf = new ArrayBuffer(MAP_PACKET_SIZE);
-                const dv = new DataView(buf);
-                dv.setUint8(MAP_TYPE_OFFSET, PACKET_TYPE_MAP);
+                const allSegments = Array.isArray(segments)
+                    ? segments.slice(0, MAP_SEG_TOTAL)
+                    : [];
+                const totalSegs = allSegments.length;
+                const pageCount = Math.max(1, Math.ceil(totalSegs / MAP_SEG_PAGE));
 
-                const segCount = Math.min(MAP_SEG_MAX, segments.length);
-                dv.setUint8(MAP_COUNT_OFFSET, segCount);
+                for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+                    const buf = new ArrayBuffer(MAP_PACKET_SIZE);
+                    const dv = new DataView(buf);
+                    dv.setUint8(MAP_TYPE_OFFSET, PACKET_TYPE_MAP);
+                    dv.setUint8(MAP_PAGE_INDEX_OFFSET, pageIndex);
+                    dv.setUint8(MAP_PAGE_COUNT_OFFSET, pageCount);
 
-                const u8 = new Uint8Array(buf);
-                for (let i = 0; i < MAP_SEG_MAX; i++) {
-                    const seg = segments[i];
-                    const count = seg ? Math.min(MAP_PTS_MAX, seg.length) : 0;
-                    dv.setUint8(MAP_COUNTS_OFFSET + i, count);
-                    const base = MAP_POINTS_OFFSET + (i * MAP_PTS_MAX * 2);
-                    for (let p = 0; p < MAP_PTS_MAX; p++) {
-                        const pt = seg && p < count ? seg[p] : { x: 0, y: 0 };
-                        const px = Math.max(-128, Math.min(127, Math.round(pt.x ?? 0)));
-                        const py = Math.max(-128, Math.min(127, Math.round(pt.y ?? 0)));
-                        u8[base + (p * 2)] = px & 0xff;
-                        u8[base + (p * 2) + 1] = py & 0xff;
+                    const start = pageIndex * MAP_SEG_PAGE;
+                    const pageSegCount = Math.max(0, Math.min(MAP_SEG_PAGE, totalSegs - start));
+                    dv.setUint8(MAP_COUNT_OFFSET, pageSegCount);
+
+                    const u8 = new Uint8Array(buf);
+                    for (let i = 0; i < MAP_SEG_PAGE; i++) {
+                        const seg = i < pageSegCount ? allSegments[start + i] : null;
+                        const count = seg ? Math.min(MAP_PTS_MAX, seg.length) : 0;
+                        dv.setUint8(MAP_COUNTS_OFFSET + i, count);
+                        const base = MAP_POINTS_OFFSET + (i * MAP_PTS_MAX * 2);
+                        for (let p = 0; p < MAP_PTS_MAX; p++) {
+                            const pt = seg && p < count ? seg[p] : { x: 0, y: 0 };
+                            const px = Math.max(-128, Math.min(127, Math.round(pt.x ?? 0)));
+                            const py = Math.max(-128, Math.min(127, Math.round(pt.y ?? 0)));
+                            u8[base + (p * 2)] = px & 0xff;
+                            u8[base + (p * 2) + 1] = py & 0xff;
+                        }
                     }
-                }
 
-                await bleChar.writeValueWithoutResponse(buf);
+                    await bleChar.writeValueWithoutResponse(buf);
+                }
             } catch (e) {
                 log('Map send error: ' + e.message, 'err');
             } finally {
@@ -1891,7 +1907,7 @@
             }
 
             candidates.sort((a, b) => b.score - a.score);
-            const segments = selectSegments(candidates, MAP_SEG_MAX);
+            const segments = selectSegments(candidates, MAP_SEG_TOTAL);
             if (segments.length) {
                 sendMapPacket(segments);
             }
