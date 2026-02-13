@@ -486,12 +486,12 @@
         const MAP_SEG_MAX = 8;
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
-        const MAP_RADIUS_M = 240;
+        const MAP_RADIUS_M = 280;
         const MAP_UPDATE_DIST_M = 6;
         const MAP_UPDATE_HEADING_DEG = 2;
         const MAP_UPDATE_MS = 700;
         const MAP_SEND_MIN_INTERVAL = 250;
-        const MAP_TILE_NEIGHBOR = 1; // fetch center tile + neighbors for better road coverage
+        const MAP_TILE_NEIGHBOR = 2; // fetch wider neighborhood for denser road coverage
         const OFF_ROUTE_METERS = 50;
         const OFF_ROUTE_HITS = 3;
         const REROUTE_COOLDOWN_MS = 20000;
@@ -526,6 +526,7 @@
         let mapFlushTimer = null;
         let tileCache = new Map();
         let lastTileLines = null;
+        let lastSnapPos = null;
         let currentPos = null;
         let routeGeometry = null, routeSteps = null;
         let navigating = false, navTimer = null;
@@ -648,6 +649,7 @@
             bleConnected = false;
             bleChar = null;
             lastTileLines = null;
+            lastSnapPos = null;
             pendingMapSegments = null;
             if (mapFlushTimer) {
                 clearTimeout(mapFlushTimer);
@@ -1271,6 +1273,7 @@
         function stopNavigation() {
             navigating = false;
             lastTileLines = null;
+            lastSnapPos = null;
             pendingMapSegments = null;
             if (mapFlushTimer) {
                 clearTimeout(mapFlushTimer);
@@ -1706,11 +1709,59 @@
             return proximity + (len * 12);
         }
 
+        function segmentCenter(seg) {
+            if (!seg || !seg.length) return { x: 0, y: 0 };
+            let sx = 0;
+            let sy = 0;
+            for (const p of seg) {
+                sx += p.x;
+                sy += p.y;
+            }
+            return { x: sx / seg.length, y: sy / seg.length };
+        }
+
+        function selectSegments(candidates, maxCount) {
+            if (!Array.isArray(candidates) || maxCount <= 0) return [];
+            if (candidates.length <= maxCount) return candidates.map(c => c.seg);
+
+            const bins = new Array(maxCount).fill(null);
+            for (const c of candidates) {
+                const ctr = segmentCenter(c.seg);
+                const angle = Math.atan2(ctr.y, ctr.x); // -PI..PI
+                let bin = Math.floor(((angle + Math.PI) / (Math.PI * 2)) * maxCount);
+                if (bin < 0) bin = 0;
+                if (bin >= maxCount) bin = maxCount - 1;
+                if (!bins[bin] || c.score > bins[bin].score) {
+                    bins[bin] = c;
+                }
+            }
+
+            const picked = [];
+            const used = new Set();
+            for (const c of bins) {
+                if (!c) continue;
+                picked.push(c.seg);
+                used.add(c);
+                if (picked.length >= maxCount) return picked;
+            }
+
+            for (const c of candidates) {
+                if (used.has(c)) continue;
+                picked.push(c.seg);
+                if (picked.length >= maxCount) break;
+            }
+
+            return picked;
+        }
+
         async function maybeUpdateMapBackground(headingDeg) {
             if (!navigating || !currentPos || isRerouting) return;
             const now = Date.now();
+            const mapOrigin = Array.isArray(lastSnapPos) && lastSnapPos.length === 2
+                ? lastSnapPos
+                : currentPos;
             const elapsedSinceUpdate = now - lastMapUpdateAt;
-            const moved = distanceMeters(lastMapPos, currentPos);
+            const moved = distanceMeters(lastMapPos, mapOrigin);
             const headingDelta = lastMapHeading === null
                 ? 360
                 : Math.abs(shortestAngleDelta(lastMapHeading, headingDeg));
@@ -1726,12 +1777,12 @@
 
             const shouldRefetchLines = !lastTileLines || moved >= MAP_UPDATE_DIST_M || elapsedSinceUpdate >= MAP_UPDATE_MS;
             if (shouldRefetchLines) {
-                lastTileLines = await getVectorTileLines(currentPos[0], currentPos[1]);
-                lastMapPos = [...currentPos];
+                lastTileLines = await getVectorTileLines(mapOrigin[0], mapOrigin[1]);
+                lastMapPos = [...mapOrigin];
             }
 
             const lines = Array.isArray(lastTileLines) ? lastTileLines : [];
-            const originPt = turf.point(currentPos);
+            const originPt = turf.point(mapOrigin);
             const candidates = [];
             for (const line of lines) {
                 const seg = lineToSegment(line, originPt, headingDeg);
@@ -1741,7 +1792,7 @@
             }
 
             candidates.sort((a, b) => b.score - a.score);
-            const segments = candidates.slice(0, MAP_SEG_MAX).map(c => c.seg);
+            const segments = selectSegments(candidates, MAP_SEG_MAX);
             if (segments.length) {
                 sendMapPacket(segments);
             }
@@ -1796,6 +1847,7 @@
             // Snap to route
             const snapped = turf.nearestPointOnLine(routeLine, pt, { units: 'meters' });
             const snappedDist = snapped.properties.location;
+            lastSnapPos = snapped?.geometry?.coordinates || currentPos;
             const offDist = Number.isFinite(snapped.properties?.dist)
                 ? snapped.properties.dist
                 : turf.distance(pt, snapped, { units: 'meters' });
