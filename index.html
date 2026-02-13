@@ -487,9 +487,9 @@
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
         const MAP_RADIUS_M = 240;
-        const MAP_UPDATE_DIST_M = 30;
-        const MAP_UPDATE_HEADING_DEG = 15;
-        const MAP_UPDATE_MS = 7000;
+        const MAP_UPDATE_DIST_M = 10;
+        const MAP_UPDATE_HEADING_DEG = 4;
+        const MAP_UPDATE_MS = 1200;
         const OFF_ROUTE_METERS = 50;
         const OFF_ROUTE_HITS = 3;
         const REROUTE_COOLDOWN_MS = 20000;
@@ -767,7 +767,7 @@
         async function sendMapPacket(segments) {
             if (!bleChar || !bleConnected || isWriting) return;
             const now = Date.now();
-            if (now - lastMapSendAt < 1200) return;
+            if (now - lastMapSendAt < 500) return;
             lastMapSendAt = now;
 
             isWriting = true;
