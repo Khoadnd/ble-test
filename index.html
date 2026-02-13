@@ -12,6 +12,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Turf.js -->
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+    <!-- Vector tiles -->
+    <script src="https://unpkg.com/pbf@3.2.1/dist/pbf.min.js"></script>
+    <script src="https://unpkg.com/@mapbox/vector-tile@1.3.1/dist/vector-tile.min.js"></script>
 
     <style>
         * {
@@ -477,6 +480,20 @@
         const PREVIEW_MAX_POINTS = 16;
         const PREVIEW_LOOKAHEAD = 400; // meters
         const PREVIEW_RANGE = 120; // coordinate range (-120..120)
+        const PACKET_TYPE_NAV = 0;
+        const PACKET_TYPE_MAP = 1;
+        const NAV_CURRENT_BYTES = 28;
+        const NAV_NEXT_BYTES = 28;
+        const MAP_SEG_MAX = 8;
+        const MAP_PTS_MAX = 12;
+        const MAP_ZOOM = 16;
+        const MAP_RADIUS_M = 400;
+        const MAP_UPDATE_DIST_M = 30;
+        const MAP_UPDATE_HEADING_DEG = 15;
+        const MAP_UPDATE_MS = 7000;
+        const OFF_ROUTE_METERS = 50;
+        const OFF_ROUTE_HITS = 3;
+        const REROUTE_COOLDOWN_MS = 20000;
 
         // ═══════════════════════════════════════════════════════
         //  STATE
@@ -492,6 +509,19 @@
         let gpsHeading = null;
         let lastPosForHeading = null;
         let lastNavPayload = null;
+        let activeStepIdx = null;
+        let offRouteCount = 0;
+        let lastRerouteAt = 0;
+        let isRerouting = false;
+        let currentRoad = '';
+        let lastRoadFetchAt = 0;
+        let lastRoadPos = null;
+        let roadAbort = null;
+        let lastMapUpdateAt = 0;
+        let lastMapPos = null;
+        let lastMapHeading = null;
+        let lastMapSendAt = 0;
+        let tileCache = new Map();
         let currentPos = null;
         let routeGeometry = null, routeSteps = null;
         let navigating = false, navTimer = null;
@@ -622,16 +652,24 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  BLE — NavPacket sender
-        //  Struct: {
-        //    uint8  icon_id,
-        //    uint32 dist_meters (LE),
-        //    char   street[32],
-        //    uint8  preview_count,
-        //    int8   preview_xy[32] (16 points: x,y),
+        //  BLE — Typed packets
+        //  NavPacketV2 (type = 0):
+        //    uint8  packet_type
+        //    uint8  icon_id
+        //    uint32 dist_meters (LE)
+        //    char   current_road[28]
+        //    char   next_road[28]
+        //    uint8  preview_count
+        //    int8   preview_xy[32] (16 points: x,y)
         //    uint16 heading_deg (0-359, LE)
-        //  }
-        //  Total: 72 bytes
+        //  Total: 97 bytes
+        //
+        //  MapPacket (type = 1):
+        //    uint8  packet_type
+        //    uint8  segment_count
+        //    uint8  segment_counts[8]
+        //    int8   segment_xy[192] (8 segments x 12 points x 2)
+        //  Total: 202 bytes
         // ═══════════════════════════════════════════════════════
 
         // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
@@ -665,13 +703,23 @@
         }
 
         const PREVIEW_BYTES = PREVIEW_MAX_POINTS * 2;
-        const STREET_MAX_BYTES = 32;
-        const PREVIEW_COUNT_OFFSET = 1 + 4 + STREET_MAX_BYTES;
-        const PREVIEW_DATA_OFFSET = PREVIEW_COUNT_OFFSET + 1;
-        const HEADING_OFFSET = PREVIEW_DATA_OFFSET + PREVIEW_BYTES;
-        const PACKET_SIZE = HEADING_OFFSET + 2;
+        const NAV_TYPE_OFFSET = 0;
+        const NAV_ICON_OFFSET = 1;
+        const NAV_DIST_OFFSET = 2;
+        const NAV_CURRENT_OFFSET = NAV_DIST_OFFSET + 4;
+        const NAV_NEXT_OFFSET = NAV_CURRENT_OFFSET + NAV_CURRENT_BYTES;
+        const NAV_PREVIEW_COUNT_OFFSET = NAV_NEXT_OFFSET + NAV_NEXT_BYTES;
+        const NAV_PREVIEW_DATA_OFFSET = NAV_PREVIEW_COUNT_OFFSET + 1;
+        const NAV_HEADING_OFFSET = NAV_PREVIEW_DATA_OFFSET + PREVIEW_BYTES;
+        const NAV_PACKET_SIZE = NAV_HEADING_OFFSET + 2;
 
-        async function sendNavPacket(iconId, distMeters, street, preview, headingDeg) {
+        const MAP_TYPE_OFFSET = 0;
+        const MAP_COUNT_OFFSET = 1;
+        const MAP_COUNTS_OFFSET = 2;
+        const MAP_POINTS_OFFSET = MAP_COUNTS_OFFSET + MAP_SEG_MAX;
+        const MAP_PACKET_SIZE = MAP_POINTS_OFFSET + (MAP_SEG_MAX * MAP_PTS_MAX * 2);
+
+        async function sendNavPacket(iconId, distMeters, currentRoad, nextRoad, preview, headingDeg) {
             if (!bleChar || !bleConnected || isWriting) return;
 
             const now = Date.now();
@@ -680,20 +728,24 @@
 
             isWriting = true;
             try {
-                const buf = new ArrayBuffer(PACKET_SIZE);
+                const buf = new ArrayBuffer(NAV_PACKET_SIZE);
                 const dv = new DataView(buf);
-                dv.setUint8(0, iconId);
-                dv.setUint32(1, Math.round(distMeters), true); // little-endian
+                dv.setUint8(NAV_TYPE_OFFSET, PACKET_TYPE_NAV);
+                dv.setUint8(NAV_ICON_OFFSET, iconId);
+                dv.setUint32(NAV_DIST_OFFSET, Math.round(distMeters), true); // little-endian
 
-                // Strip diacritics for ESP32 display, truncate to fit 32 bytes
-                const ascii = stripDiacritics(street || '');
-                const streetBytes = truncateToBytes(ascii, STREET_MAX_BYTES);
+                // Strip diacritics, truncate to fit bytes
+                const currentAscii = stripDiacritics(currentRoad || '');
+                const currentBytes = truncateToBytes(currentAscii, NAV_CURRENT_BYTES);
+                const nextAscii = stripDiacritics(nextRoad || '');
+                const nextBytes = truncateToBytes(nextAscii, NAV_NEXT_BYTES);
                 const u8 = new Uint8Array(buf);
-                u8.set(streetBytes, 5);   // rest is zero-padded by ArrayBuffer
+                u8.set(currentBytes, NAV_CURRENT_OFFSET);
+                u8.set(nextBytes, NAV_NEXT_OFFSET);
 
                 const previewCount = Math.min(PREVIEW_MAX_POINTS, preview?.count || 0);
-                dv.setUint8(PREVIEW_COUNT_OFFSET, previewCount);
-                const previewOffset = PREVIEW_DATA_OFFSET;
+                dv.setUint8(NAV_PREVIEW_COUNT_OFFSET, previewCount);
+                const previewOffset = NAV_PREVIEW_DATA_OFFSET;
                 for (let i = 0; i < PREVIEW_MAX_POINTS; i++) {
                     const idx = i * 2;
                     const px = preview?.points?.[i]?.x ?? 0;
@@ -703,11 +755,49 @@
                 }
 
                 const heading = Math.max(0, Math.min(359, Math.round(headingDeg || 0)));
-                dv.setUint16(HEADING_OFFSET, heading, true);
+                dv.setUint16(NAV_HEADING_OFFSET, heading, true);
 
                 await bleChar.writeValueWithoutResponse(buf);
             } catch (e) {
                 log('Send error: ' + e.message, 'err');
+            } finally {
+                isWriting = false;
+            }
+        }
+
+        async function sendMapPacket(segments) {
+            if (!bleChar || !bleConnected || isWriting) return;
+            const now = Date.now();
+            if (now - lastMapSendAt < 1200) return;
+            lastMapSendAt = now;
+
+            isWriting = true;
+            try {
+                const buf = new ArrayBuffer(MAP_PACKET_SIZE);
+                const dv = new DataView(buf);
+                dv.setUint8(MAP_TYPE_OFFSET, PACKET_TYPE_MAP);
+
+                const segCount = Math.min(MAP_SEG_MAX, segments.length);
+                dv.setUint8(MAP_COUNT_OFFSET, segCount);
+
+                const u8 = new Uint8Array(buf);
+                for (let i = 0; i < MAP_SEG_MAX; i++) {
+                    const seg = segments[i];
+                    const count = seg ? Math.min(MAP_PTS_MAX, seg.length) : 0;
+                    dv.setUint8(MAP_COUNTS_OFFSET + i, count);
+                    const base = MAP_POINTS_OFFSET + (i * MAP_PTS_MAX * 2);
+                    for (let p = 0; p < MAP_PTS_MAX; p++) {
+                        const pt = seg && p < count ? seg[p] : { x: 0, y: 0 };
+                        const px = Math.max(-128, Math.min(127, Math.round(pt.x ?? 0)));
+                        const py = Math.max(-128, Math.min(127, Math.round(pt.y ?? 0)));
+                        u8[base + (p * 2)] = px & 0xff;
+                        u8[base + (p * 2) + 1] = py & 0xff;
+                    }
+                }
+
+                await bleChar.writeValueWithoutResponse(buf);
+            } catch (e) {
+                log('Map send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
             }
@@ -932,6 +1022,70 @@
             }
         }
 
+        function buildRouteSteps(route, routeLine) {
+            const steps = [];
+            const instructions = route.guidance?.instructions || [];
+            for (const instr of instructions) {
+                if (!instr.point) continue;
+                const name = instr.street || instr.signpostText || instr.roadNumbers?.[0] || instr.message || '';
+                const location = [instr.point.longitude, instr.point.latitude];
+                const snapped = turf.nearestPointOnLine(routeLine, turf.point(location), { units: 'meters' });
+                const routeDist = snapped?.properties?.location ?? 0;
+                steps.push({
+                    maneuver: instr.maneuver || 'STRAIGHT',
+                    name: stripHtml(name),
+                    location,
+                    turnAngle: instr.turnAngleInDecimalDegrees || 0,
+                    routeDist
+                });
+            }
+
+            if (steps.length === 0 && routeLine?.geometry?.coordinates?.length) {
+                const last = routeLine.geometry.coordinates[routeLine.geometry.coordinates.length - 1];
+                steps.push({
+                    maneuver: 'ARRIVE',
+                    name: 'Destination',
+                    location: last,
+                    turnAngle: 0,
+                    routeDist: turf.length(routeLine, { units: 'meters' })
+                });
+            }
+            return steps;
+        }
+
+        function applyRouteResult(result) {
+            if (!result) return false;
+            const route = result.route;
+            routeGeometry = {
+                type: 'LineString',
+                coordinates: result.geometry
+            };
+            const routeLine = turf.lineString(routeGeometry.coordinates);
+            routeSteps = buildRouteSteps(route, routeLine);
+            activeStepIdx = null;
+            offRouteCount = 0;
+            return true;
+        }
+
+        async function triggerReroute() {
+            if (isRerouting || !currentPos || !destCoords) return;
+            const now = Date.now();
+            if (now - lastRerouteAt < REROUTE_COOLDOWN_MS) return;
+            isRerouting = true;
+            lastRerouteAt = now;
+            statusText.textContent = 'Rerouting…';
+            log('🔁 Rerouting…');
+
+            const result = await fetchAndDrawRoute(currentPos, destCoords, false);
+            if (applyRouteResult(result)) {
+                log('✅ Reroute complete');
+            } else {
+                log('⚠️ Reroute failed', 'err');
+            }
+            statusText.textContent = 'Navigating…';
+            isRerouting = false;
+        }
+
         function drawRoute(coords) {
             if (routePolyline) map.removeLayer(routePolyline);
             const latLngs = coords.map(c => [c[1], c[0]]);
@@ -1035,46 +1189,20 @@
             statusText.textContent = 'Calculating route…';
 
             const result = await fetchAndDrawRoute(currentPos, destCoords, false);
-            if (!result) {
+            if (!applyRouteResult(result)) {
                 alert('No route found');
                 statusText.textContent = bleConnected ? 'Connected to MotoHUD' : 'Disconnected';
                 return;
             }
 
-            const route = result.route;
-            routeGeometry = {
-                type: 'LineString',
-                coordinates: result.geometry
-            };
-            routeSteps = [];
-
-            const instructions = route.guidance?.instructions || [];
-            for (const instr of instructions) {
-                if (!instr.point) continue;
-                const name = instr.street || instr.signpostText || instr.roadNumbers?.[0] || instr.message || '';
-                routeSteps.push({
-                    maneuver: instr.maneuver || 'STRAIGHT',
-                    name: stripHtml(name),
-                    location: [instr.point.longitude, instr.point.latitude],
-                    turnAngle: instr.turnAngleInDecimalDegrees || 0
-                });
-            }
-
-            if (routeSteps.length === 0 && result.geometry.length) {
-                const last = result.geometry[result.geometry.length - 1];
-                routeSteps.push({
-                    maneuver: 'ARRIVE',
-                    name: 'Destination',
-                    location: last,
-                    turnAngle: 0
-                });
-            }
-
-            const totalDist = route.summary?.lengthInMeters || 0;
+            const totalDist = result.route.summary?.lengthInMeters || 0;
             log(`Route: ${routeSteps.length} steps, ${(totalDist / 1000).toFixed(1)} km`);
 
             // Start nav mode
             navigating = true;
+            lastMapUpdateAt = 0;
+            lastMapPos = null;
+            lastMapHeading = null;
             navInfo.classList.add('active');
             navBtn.style.display = 'none';
             stopBtn.style.display = 'block';
@@ -1102,6 +1230,12 @@
             routeGeometry = null;
             routeSteps = null;
             lastNavPayload = null;
+            activeStepIdx = null;
+            offRouteCount = 0;
+            isRerouting = false;
+            lastMapUpdateAt = 0;
+            lastMapPos = null;
+            lastMapHeading = null;
 
             log('⏹ Navigation stopped');
         }
@@ -1201,10 +1335,12 @@
                     sendNavPacket(
                         lastNavPayload.iconId,
                         lastNavPayload.distMeters,
-                        lastNavPayload.streetName,
+                        lastNavPayload.currentRoad,
+                        lastNavPayload.nextRoad,
                         preview,
                         getHeadingToSend()
                     );
+                    maybeUpdateMapBackground(getHeadingToSend());
                 }
             }
         }
@@ -1224,6 +1360,170 @@
             } else {
                 window.addEventListener('deviceorientationabsolute', handleOrientation, true);
                 window.addEventListener('deviceorientation', handleOrientation, true);
+            }
+        }
+
+        function distanceMeters(a, b) {
+            if (!a || !b) return Infinity;
+            return turf.distance(turf.point(a), turf.point(b), { units: 'meters' });
+        }
+
+        async function maybeUpdateCurrentRoad() {
+            if (!TOMTOM_KEY || !currentPos) return;
+            const now = Date.now();
+            const moved = distanceMeters(lastRoadPos, currentPos);
+            if (moved < 50 && now - lastRoadFetchAt < 10000) return;
+
+            lastRoadFetchAt = now;
+            lastRoadPos = [...currentPos];
+
+            if (roadAbort) roadAbort.abort();
+            roadAbort = new AbortController();
+
+            try {
+                const url = `https://api.tomtom.com/search/2/reverseGeocode/${currentPos[1]},${currentPos[0]}.json?key=${encodeURIComponent(TOMTOM_KEY)}`;
+                const res = await fetch(url, { signal: roadAbort.signal });
+                if (!res.ok) return;
+                const data = await res.json();
+                const addr = data.addresses?.[0]?.address || {};
+                const road = addr.streetName || addr.street || addr.freeformAddress || '';
+                currentRoad = stripHtml(road);
+                if (lastNavPayload) lastNavPayload.currentRoad = currentRoad;
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    log('Reverse geocode error: ' + e.message, 'err');
+                }
+            }
+        }
+
+        function lonLatToTile(lon, lat, zoom) {
+            const z2 = Math.pow(2, zoom);
+            const x = Math.floor((lon + 180) / 360 * z2);
+            const latRad = lat * Math.PI / 180;
+            const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * z2);
+            return { x, y };
+        }
+
+        function tileCoordToLonLat(tileX, tileY, zoom, x, y, extent) {
+            const z2 = Math.pow(2, zoom);
+            const lon = ((tileX + x / extent) / z2) * 360 - 180;
+            const n = Math.PI - 2 * Math.PI * (tileY + y / extent) / z2;
+            const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+            return [lon, lat];
+        }
+
+        function shouldUseLayer(name) {
+            const n = (name || '').toLowerCase();
+            return n.includes('road') || n.includes('street') || n.includes('transport') || n.includes('path');
+        }
+
+        async function getVectorTileLines(lon, lat) {
+            if (!TOMTOM_KEY) return [];
+            const tile = lonLatToTile(lon, lat, MAP_ZOOM);
+            const key = `${MAP_ZOOM}/${tile.x}/${tile.y}`;
+            if (tileCache.has(key)) {
+                return tileCache.get(key);
+            }
+
+            const VectorTile = (window.vectorTile && window.vectorTile.VectorTile) || window.VectorTile;
+            if (!window.Pbf || !VectorTile) {
+                log('Vector tile libs not loaded', 'err');
+                return [];
+            }
+
+            try {
+                const url = `https://api.tomtom.com/map/1/tile/basic/night/${MAP_ZOOM}/${tile.x}/${tile.y}.pbf?key=${encodeURIComponent(TOMTOM_KEY)}`;
+                const res = await fetch(url);
+                if (!res.ok) return [];
+                const buf = await res.arrayBuffer();
+                const vt = new VectorTile(new window.Pbf(new Uint8Array(buf)));
+                const lines = [];
+                const layers = vt.layers || {};
+                for (const name of Object.keys(layers)) {
+                    if (!shouldUseLayer(name)) continue;
+                    const layer = layers[name];
+                    const extent = layer.extent || 4096;
+                    for (let i = 0; i < layer.length; i++) {
+                        const feature = layer.feature(i);
+                        if (feature.type !== 2) continue;
+                        const geom = feature.loadGeometry();
+                        for (const line of geom) {
+                            if (line.length < 2) continue;
+                            const linePts = line.map(pt => tileCoordToLonLat(tile.x, tile.y, MAP_ZOOM, pt.x, pt.y, extent));
+                            lines.push(linePts);
+                        }
+                    }
+                }
+                if (tileCache.size > 6) tileCache.clear();
+                tileCache.set(key, lines);
+                return lines;
+            } catch (e) {
+                log('Vector tile error: ' + e.message, 'err');
+                return [];
+            }
+        }
+
+        function simplifySegment(points, maxPoints) {
+            if (points.length <= maxPoints) return points;
+            const out = [];
+            const step = (points.length - 1) / (maxPoints - 1);
+            for (let i = 0; i < maxPoints; i++) {
+                const idx = Math.round(i * step);
+                out.push(points[idx]);
+            }
+            return out;
+        }
+
+        function lineToSegment(line, originPt, headingDeg) {
+            const headingRef = Number.isFinite(headingDeg) ? headingDeg : 0;
+            const seg = [];
+            for (const coord of line) {
+                const pt = turf.point(coord);
+                const dist = turf.distance(originPt, pt, { units: 'meters' });
+                if (dist > MAP_RADIUS_M * 1.1) continue;
+                const bearing = turf.bearing(originPt, pt);
+                const rel = (bearing - headingRef) * Math.PI / 180;
+                const x = Math.sin(rel) * dist;
+                const y = Math.cos(rel) * dist;
+                const scale = PREVIEW_RANGE / MAP_RADIUS_M;
+                let sx = Math.round(x * scale);
+                let sy = Math.round(y * scale);
+                sx = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sx));
+                sy = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sy));
+                seg.push({ x: sx, y: sy });
+            }
+            if (seg.length < 2) return null;
+            return simplifySegment(seg, MAP_PTS_MAX);
+        }
+
+        async function maybeUpdateMapBackground(headingDeg) {
+            if (!navigating || !currentPos || isRerouting) return;
+            const now = Date.now();
+            const moved = distanceMeters(lastMapPos, currentPos);
+            const headingDelta = lastMapHeading === null
+                ? 360
+                : Math.abs(shortestAngleDelta(lastMapHeading, headingDeg));
+
+            if (moved < MAP_UPDATE_DIST_M &&
+                headingDelta < MAP_UPDATE_HEADING_DEG &&
+                now - lastMapUpdateAt < MAP_UPDATE_MS) {
+                return;
+            }
+
+            lastMapUpdateAt = now;
+            lastMapPos = [...currentPos];
+            lastMapHeading = headingDeg;
+
+            const lines = await getVectorTileLines(currentPos[0], currentPos[1]);
+            const originPt = turf.point(currentPos);
+            const segments = [];
+            for (const line of lines) {
+                if (segments.length >= MAP_SEG_MAX) break;
+                const seg = lineToSegment(line, originPt, headingDeg);
+                if (seg && seg.length >= 2) segments.push(seg);
+            }
+            if (segments.length) {
+                sendMapPacket(segments);
             }
         }
 
@@ -1266,41 +1566,43 @@
 
         function onGpsUpdate() {
             if (!currentPos || !routeGeometry || !routeSteps || routeSteps.length === 0) return;
+            if (isRerouting) return;
+
+            maybeUpdateCurrentRoad();
 
             const routeLine = turf.lineString(routeGeometry.coordinates);
             const pt = turf.point(currentPos);
 
             // Snap to route
             const snapped = turf.nearestPointOnLine(routeLine, pt, { units: 'meters' });
-            const snappedDist = snapped.properties.location; // distance along route in meters (approx from index)
+            const snappedDist = snapped.properties.location;
+            const offDist = Number.isFinite(snapped.properties?.dist)
+                ? snapped.properties.dist
+                : turf.distance(pt, snapped, { units: 'meters' });
 
-            // Find NEXT step: the one whose maneuver point we haven't passed yet
-            let nextStepIdx = 0;
-
-            for (let i = 0; i < routeSteps.length; i++) {
-                const stepPt = turf.point(routeSteps[i].location);
-                const stepDist = turf.distance(pt, stepPt, { units: 'meters' });
-
-                // If we're within 30m of a step, we've reached it — look at the next one
-                if (stepDist < 30 && i < routeSteps.length - 1) {
-                    nextStepIdx = i + 1;
-                    continue;
-                }
-
-                // Find next step that's ahead of us
-                if (i > nextStepIdx) {
-                    // Check if this step's maneuver point is ahead on the route
-                    const maneuverPt = turf.point(routeSteps[i].location);
-                    const distToManeuver = turf.distance(pt, maneuverPt, { units: 'meters' });
-
-                    if (distToManeuver > 20) {
-                        nextStepIdx = i;
-                        break;
-                    }
-                }
+            if (offDist > OFF_ROUTE_METERS) {
+                offRouteCount += 1;
+            } else {
+                offRouteCount = 0;
             }
 
-            const nextStep = routeSteps[nextStepIdx];
+            if (offRouteCount >= OFF_ROUTE_HITS) {
+                offRouteCount = 0;
+                triggerReroute();
+                return;
+            }
+
+            if (activeStepIdx === null || activeStepIdx >= routeSteps.length) {
+                activeStepIdx = routeSteps.findIndex(step => step.routeDist >= snappedDist - 5);
+                if (activeStepIdx === -1) activeStepIdx = routeSteps.length - 1;
+            }
+
+            while (activeStepIdx < routeSteps.length - 1 &&
+                snappedDist > (routeSteps[activeStepIdx].routeDist + 20)) {
+                activeStepIdx += 1;
+            }
+
+            const nextStep = routeSteps[activeStepIdx];
             if (!nextStep) return;
 
             // Distance from current position to next maneuver
@@ -1312,18 +1614,27 @@
 
             // Check for arrival
             const maneuverKey = (nextStep.maneuver || '').toUpperCase();
-            if (maneuverKey.startsWith('ARRIVE') || (nextStepIdx === routeSteps.length - 1 && distToTurn < 50)) {
+            if (maneuverKey.startsWith('ARRIVE') || (activeStepIdx === routeSteps.length - 1 && distToTurn < 50)) {
                 iconId = 4;
             }
 
-            const streetName = nextStep.name || '';
+            const nextRoad = nextStep.name || '';
+            const displayStreet = nextRoad || currentRoad || '—';
             const headingToSend = getHeadingToSend();
             const preview = buildPreviewPoints(routeLine, snappedDist, distToTurn, headingToSend);
-            lastNavPayload = { iconId, distMeters: distToTurn, streetName, preview, snapDist: snappedDist, distToTurn };
+            lastNavPayload = {
+                iconId,
+                distMeters: distToTurn,
+                currentRoad,
+                nextRoad,
+                preview,
+                snapDist: snappedDist,
+                distToTurn
+            };
 
             // Update web UI
             navIcon.textContent = ICON_ARROWS[iconId] || '↑';
-            navStreet.textContent = streetName || '—';
+            navStreet.textContent = displayStreet;
             if (distToTurn >= 1000) {
                 navDist.textContent = (distToTurn / 1000).toFixed(1);
                 navUnit.textContent = 'km';
@@ -1333,7 +1644,8 @@
             }
 
             // Send to ESP32
-            sendNavPacket(iconId, distToTurn, streetName, preview, headingToSend);
+            sendNavPacket(iconId, distToTurn, currentRoad, nextRoad, preview, headingToSend);
+            maybeUpdateMapBackground(headingToSend);
         }
 
         // ═══════════════════════════════════════════════════════
