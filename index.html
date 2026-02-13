@@ -491,6 +491,7 @@
         const MAP_UPDATE_HEADING_DEG = 2;
         const MAP_UPDATE_MS = 700;
         const MAP_SEND_MIN_INTERVAL = 250;
+        const MAP_NAV_GUARD_MS = 140;
         const MAP_TILE_NEIGHBOR = 2; // fetch wider neighborhood for denser road coverage
         const MAP_CHUNK_OVERLAP = 3;
         const OFF_ROUTE_METERS = 50;
@@ -523,6 +524,9 @@
         let lastMapPos = null;
         let lastMapHeading = null;
         let lastMapSendAt = 0;
+        let lastNavWriteAt = 0;
+        let pendingNavPayload = null;
+        let navFlushTimer = null;
         let pendingMapSegments = null;
         let mapFlushTimer = null;
         let tileCache = new Map();
@@ -651,6 +655,11 @@
             bleChar = null;
             lastTileLines = null;
             lastSnapPos = null;
+            pendingNavPayload = null;
+            if (navFlushTimer) {
+                clearTimeout(navFlushTimer);
+                navFlushTimer = null;
+            }
             pendingMapSegments = null;
             if (mapFlushTimer) {
                 clearTimeout(mapFlushTimer);
@@ -732,8 +741,32 @@
         const MAP_POINTS_OFFSET = MAP_COUNTS_OFFSET + MAP_SEG_MAX;
         const MAP_PACKET_SIZE = MAP_POINTS_OFFSET + (MAP_SEG_MAX * MAP_PTS_MAX * 2);
 
+        function scheduleNavFlush(delayMs = 30) {
+            if (navFlushTimer) return;
+            navFlushTimer = setTimeout(() => {
+                navFlushTimer = null;
+                flushPendingNavPacket();
+            }, Math.max(0, delayMs));
+        }
+
+        async function flushPendingNavPacket() {
+            if (!pendingNavPayload || !bleChar || !bleConnected) return;
+            if (isWriting) {
+                scheduleNavFlush(30);
+                return;
+            }
+            const p = pendingNavPayload;
+            pendingNavPayload = null;
+            await sendNavPacket(p.iconId, p.distMeters, p.currentRoad, p.nextRoad, p.preview, p.headingDeg);
+        }
+
         async function sendNavPacket(iconId, distMeters, currentRoad, nextRoad, preview, headingDeg) {
-            if (!bleChar || !bleConnected || isWriting) return;
+            if (!bleChar || !bleConnected) return;
+            if (isWriting) {
+                pendingNavPayload = { iconId, distMeters, currentRoad, nextRoad, preview, headingDeg };
+                scheduleNavFlush(30);
+                return;
+            }
 
             const now = Date.now();
             if (now - lastSendTime < NAV_UPDATE_INTERVAL) return;
@@ -771,6 +804,7 @@
                 dv.setUint16(NAV_HEADING_OFFSET, heading, true);
 
                 await bleChar.writeValueWithoutResponse(buf);
+                lastNavWriteAt = Date.now();
             } catch (e) {
                 log('Send error: ' + e.message, 'err');
             } finally {
@@ -803,6 +837,11 @@
                 scheduleMapFlush(80);
                 return;
             }
+            const now = Date.now();
+            if (now - lastNavWriteAt < MAP_NAV_GUARD_MS) {
+                scheduleMapFlush(MAP_NAV_GUARD_MS - (now - lastNavWriteAt) + 10);
+                return;
+            }
             const queued = pendingMapSegments;
             pendingMapSegments = null;
             await sendMapPacket(queued);
@@ -810,6 +849,11 @@
 
         async function sendMapPacket(segments) {
             if (!bleChar || !bleConnected) return;
+            if (pendingNavPayload) {
+                scheduleMapFlush(40);
+                scheduleNavFlush(0);
+                return;
+            }
             if (isWriting) {
                 pendingMapSegments = cloneMapSegments(segments);
                 scheduleMapFlush(80);
@@ -817,6 +861,11 @@
             }
 
             const now = Date.now();
+            if (now - lastNavWriteAt < MAP_NAV_GUARD_MS) {
+                pendingMapSegments = cloneMapSegments(segments);
+                scheduleMapFlush(MAP_NAV_GUARD_MS - (now - lastNavWriteAt) + 10);
+                return;
+            }
             const minInterval = MAP_SEND_MIN_INTERVAL;
             const elapsed = now - lastMapSendAt;
             if (elapsed < minInterval) {
@@ -855,6 +904,7 @@
                 log('Map send error: ' + e.message, 'err');
             } finally {
                 isWriting = false;
+                flushPendingNavPacket();
                 if (pendingMapSegments) {
                     scheduleMapFlush(0);
                 }
@@ -1275,6 +1325,11 @@
             navigating = false;
             lastTileLines = null;
             lastSnapPos = null;
+            pendingNavPayload = null;
+            if (navFlushTimer) {
+                clearTimeout(navFlushTimer);
+                navFlushTimer = null;
+            }
             pendingMapSegments = null;
             if (mapFlushTimer) {
                 clearTimeout(mapFlushTimer);
