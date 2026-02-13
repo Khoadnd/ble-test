@@ -486,12 +486,13 @@
         const MAP_SEG_MAX = 8;
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
-        const MAP_RADIUS_M = 280;
+        const MAP_RADIUS_M = 320;
         const MAP_UPDATE_DIST_M = 6;
         const MAP_UPDATE_HEADING_DEG = 2;
         const MAP_UPDATE_MS = 700;
         const MAP_SEND_MIN_INTERVAL = 250;
         const MAP_TILE_NEIGHBOR = 2; // fetch wider neighborhood for denser road coverage
+        const MAP_CHUNK_OVERLAP = 3;
         const OFF_ROUTE_METERS = 50;
         const OFF_ROUTE_HITS = 3;
         const REROUTE_COOLDOWN_MS = 20000;
@@ -1670,7 +1671,7 @@
             return out;
         }
 
-        function lineToSegment(line, originPt, headingDeg) {
+        function lineToProjectedPoints(line, originPt, headingDeg) {
             const headingRef = Number.isFinite(headingDeg) ? headingDeg : 0;
             const seg = [];
             for (const coord of line) {
@@ -1686,10 +1687,26 @@
                 let sy = Math.round(y * scale);
                 sx = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sx));
                 sy = Math.max(-PREVIEW_RANGE, Math.min(PREVIEW_RANGE, sy));
-                seg.push({ x: sx, y: sy });
+                const prev = seg[seg.length - 1];
+                if (!prev || prev.x !== sx || prev.y !== sy) {
+                    seg.push({ x: sx, y: sy });
+                }
             }
-            if (seg.length < 2) return null;
-            return simplifySegment(seg, MAP_PTS_MAX);
+            return seg;
+        }
+
+        function splitProjectedLine(points) {
+            if (!Array.isArray(points) || points.length < 2) return [];
+            if (points.length <= MAP_PTS_MAX) return [points];
+
+            const out = [];
+            const stride = Math.max(2, MAP_PTS_MAX - MAP_CHUNK_OVERLAP);
+            for (let i = 0; i < points.length - 1; i += stride) {
+                const chunk = points.slice(i, i + MAP_PTS_MAX);
+                if (chunk.length >= 2) out.push(chunk);
+                if (i + MAP_PTS_MAX >= points.length) break;
+            }
+            return out;
         }
 
         function scoreSegment(seg) {
@@ -1785,10 +1802,16 @@
             const originPt = turf.point(mapOrigin);
             const candidates = [];
             for (const line of lines) {
-                const seg = lineToSegment(line, originPt, headingDeg);
-                if (seg && seg.length >= 2) {
-                    candidates.push({ seg, score: scoreSegment(seg) });
+                const projected = lineToProjectedPoints(line, originPt, headingDeg);
+                const chunks = splitProjectedLine(projected);
+                for (const chunk of chunks) {
+                    const seg = simplifySegment(chunk, MAP_PTS_MAX);
+                    if (seg && seg.length >= 2) {
+                        candidates.push({ seg, score: scoreSegment(seg) });
+                    }
+                    if (candidates.length > 320) break;
                 }
+                if (candidates.length > 320) break;
             }
 
             candidates.sort((a, b) => b.score - a.score);
