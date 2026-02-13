@@ -104,6 +104,7 @@
             padding: 16px 16px calc(12px + var(--safe-bottom));
             z-index: 1000;
             transition: transform 0.3s ease;
+            will-change: transform;
         }
 
         .sheet-handle {
@@ -112,6 +113,12 @@
             background: var(--card-border);
             border-radius: 2px;
             margin: 0 auto 14px;
+            cursor: grab;
+            touch-action: none;
+        }
+
+        .sheet-handle:active {
+            cursor: grabbing;
         }
 
         /* ── Nav Info (shown during navigation) ── */
@@ -447,8 +454,8 @@
     </div>
 
     <!-- ════ BOTTOM SHEET ════ -->
-    <div class="bottom-sheet">
-        <div class="sheet-handle"></div>
+    <div class="bottom-sheet" id="bottomSheet">
+        <div class="sheet-handle" id="sheetHandle"></div>
 
         <!-- Nav info (visible during navigation) -->
         <div class="nav-info" id="navInfo">
@@ -624,8 +631,84 @@
         const destInput = $('destInput');
         const funModeToggle = $('funModeToggle');
         const destSuggestions = $('destSuggestions');
+        const bottomSheet = $('bottomSheet');
+        const sheetHandle = $('sheetHandle');
         const logPanel = $('logPanel');
         const logToggle = $('logToggle');
+
+        let sheetOffsetY = 0;
+        let sheetCollapsedY = 0;
+        let sheetDragging = false;
+        let sheetDragStartY = 0;
+        let sheetDragStartOffset = 0;
+
+        function clamp(v, min, max) {
+            return Math.max(min, Math.min(max, v));
+        }
+
+        function computeSheetCollapsedY() {
+            const h = bottomSheet?.offsetHeight || 0;
+            const visibleWhenCollapsed = 98;
+            sheetCollapsedY = Math.max(0, h - visibleWhenCollapsed);
+        }
+
+        function setSheetOffset(y, withTransition = false) {
+            if (!bottomSheet) return;
+            sheetOffsetY = clamp(y, 0, sheetCollapsedY);
+            bottomSheet.style.transition = withTransition ? 'transform 0.22s ease' : 'none';
+            bottomSheet.style.transform = `translateY(${sheetOffsetY}px)`;
+        }
+
+        function snapSheet() {
+            const threshold = sheetCollapsedY * 0.45;
+            const target = sheetOffsetY > threshold ? sheetCollapsedY : 0;
+            setSheetOffset(target, true);
+        }
+
+        function onSheetPointerDown(e) {
+            sheetDragging = true;
+            sheetDragStartY = e.clientY;
+            sheetDragStartOffset = sheetOffsetY;
+            sheetHandle?.setPointerCapture?.(e.pointerId);
+            setSheetOffset(sheetOffsetY, false);
+            e.preventDefault();
+        }
+
+        function onSheetPointerMove(e) {
+            if (!sheetDragging) return;
+            const dy = e.clientY - sheetDragStartY;
+            setSheetOffset(sheetDragStartOffset + dy, false);
+            e.preventDefault();
+        }
+
+        function onSheetPointerUp(e) {
+            if (!sheetDragging) return;
+            sheetDragging = false;
+            sheetHandle?.releasePointerCapture?.(e.pointerId);
+            snapSheet();
+        }
+
+        function initBottomSheetDrawer() {
+            if (!bottomSheet || !sheetHandle) return;
+            computeSheetCollapsedY();
+            setSheetOffset(0, false);
+
+            sheetHandle.addEventListener('pointerdown', onSheetPointerDown);
+            window.addEventListener('pointermove', onSheetPointerMove, { passive: false });
+            window.addEventListener('pointerup', onSheetPointerUp);
+            window.addEventListener('pointercancel', onSheetPointerUp);
+
+            sheetHandle.addEventListener('click', () => {
+                const target = sheetOffsetY > 8 ? 0 : sheetCollapsedY;
+                setSheetOffset(target, true);
+            });
+
+            window.addEventListener('resize', () => {
+                const ratio = sheetCollapsedY > 0 ? (sheetOffsetY / sheetCollapsedY) : 0;
+                computeSheetCollapsedY();
+                setSheetOffset(sheetCollapsedY * ratio, false);
+            });
+        }
 
         // ═══════════════════════════════════════════════════════
         //  LOG
@@ -2161,6 +2244,7 @@
         });
 
         window.addEventListener('load', () => {
+            initBottomSheetDrawer();
             if (!navigator.bluetooth) {
                 log('⚠️ Web Bluetooth not available — use Bluefy or Chrome HTTPS', 'err');
             } else {
