@@ -1183,6 +1183,7 @@
             lastRerouteAt = now;
             statusText.textContent = 'Rerouting…';
             log('🔁 Rerouting…');
+            sendHudReroutingHint();
 
             const result = await fetchAndDrawRoute(currentPos, destCoords, false);
             if (applyRouteResult(result)) {
@@ -1321,7 +1322,28 @@
             onGpsUpdate();
         }
 
+        function sendHudReroutingHint() {
+            if (!bleConnected) return;
+            const heading = getHeadingToSend();
+            const preview = lastNavPayload?.preview || { count: 0, points: [] };
+            sendNavPacket(
+                lastNavPayload?.iconId ?? 0,
+                lastNavPayload?.distMeters ?? 0,
+                'Rerouting...',
+                '',
+                preview,
+                heading
+            );
+        }
+
+        function sendHudStopPacket() {
+            if (!bleConnected) return;
+            sendNavPacket(4, 0, '', '', { count: 0, points: [] }, getHeadingToSend());
+            sendMapPacket([]);
+        }
+
         function stopNavigation() {
+            sendHudStopPacket();
             navigating = false;
             lastTileLines = null;
             lastSnapPos = null;
@@ -1413,7 +1435,6 @@
             const to = turf.point([lon, lat]);
             const dist = turf.distance(from, to, { units: 'meters' });
             if (dist < 4) return;
-
             const bearing = turf.bearing(from, to);
             gpsHeading = normalizeHeading(bearing);
             lastPosForHeading = [lon, lat];
