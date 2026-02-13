@@ -483,7 +483,7 @@
         const PACKET_TYPE_MAP = 1;
         const NAV_CURRENT_BYTES = 28;
         const NAV_NEXT_BYTES = 28;
-        const MAP_SEG_MAX = 8;
+        const MAP_SEG_MAX = 9;
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
         const MAP_RADIUS_M = 320;
@@ -689,9 +689,9 @@
         //  MapPacket (type = 1):
         //    uint8  packet_type
         //    uint8  segment_count
-        //    uint8  segment_counts[8]
-        //    int8   segment_xy[192] (8 segments x 12 points x 2)
-        //  Total: 202 bytes
+        //    uint8  segment_counts[9]
+        //    int8   segment_xy[216] (9 segments x 12 points x 2)
+        //  Total: 227 bytes
         // ═══════════════════════════════════════════════════════
 
         // Strip Vietnamese diacritics → ASCII (ESP32 fonts are Latin-only)
