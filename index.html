@@ -1109,9 +1109,11 @@
                 }
                 const params = new URLSearchParams({
                     key: TOMTOM_KEY,
-                    travelMode: 'car',
+                    travelMode: 'motorcycle',
                     instructionsType: 'coded',
                     language: 'en-US',
+                    hilliness: 'high',
+                    windingness: 'high',
                     routeRepresentation: 'polyline',
                     computeTravelTimeFor: 'all',
                     traffic: 'true'
