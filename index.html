@@ -774,6 +774,12 @@
                     try { navigator.bluetooth.setScreenDimEnabled(false); } catch (_) { }
                 }
 
+                if (navigator.bluetooth.addEventListener) {
+                    navigator.bluetooth.addEventListener('backgroundstatechanged', (event) => {
+                        log(`📱 App Background State: ${event.inBackground ? 'BACKGROUND 🌙' : 'FOREGROUND ☀️'}`, 'info');
+                    });
+                }
+
                 statusText.textContent = 'Connecting…';
                 const server = await bleDevice.gatt.connect();
                 const service = await server.getPrimaryService(BLE_SERVICE_UUID);
