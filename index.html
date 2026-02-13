@@ -156,6 +156,60 @@
             margin-bottom: 12px;
         }
 
+        .mode-row {
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+        }
+
+        .mode-label {
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .mode-label strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .mode-toggle {
+            width: 42px;
+            height: 24px;
+            appearance: none;
+            border-radius: 999px;
+            background: #2a314d;
+            border: 1px solid var(--card-border);
+            position: relative;
+            outline: none;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .mode-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            transition: transform 0.2s ease;
+        }
+
+        .mode-toggle:checked {
+            background: linear-gradient(135deg, #ff8a00, #ff3d6e);
+        }
+
+        .mode-toggle:checked::after {
+            transform: translateX(18px);
+        }
+
         .dest-input {
             width: 100%;
             padding: 12px 16px;
@@ -410,6 +464,10 @@
         <div class="dest-section" id="destSection">
             <input class="dest-input" id="destInput" type="text" placeholder="Where to?" autocomplete="off">
             <div class="dest-suggestions" id="destSuggestions"></div>
+            <div class="mode-row">
+                <div class="mode-label"><strong>Fun mode</strong> · thrilling roads</div>
+                <input type="checkbox" class="mode-toggle" id="funModeToggle">
+            </div>
         </div>
 
         <!-- Buttons -->
@@ -564,6 +622,7 @@
         const navDist = $('navDist');
         const navUnit = $('navUnit');
         const destInput = $('destInput');
+        const funModeToggle = $('funModeToggle');
         const destSuggestions = $('destSuggestions');
         const logPanel = $('logPanel');
         const logToggle = $('logToggle');
@@ -962,6 +1021,14 @@
         }
 
         function setupAutocomplete() {
+            funModeToggle.addEventListener('change', () => {
+                const mode = funModeToggle.checked ? 'Fun mode ON' : 'Fun mode OFF';
+                log('🛣️ ' + mode);
+                if (currentPos && destCoords) {
+                    fetchAndDrawRoute(currentPos, destCoords, true);
+                }
+            });
+
             destInput.addEventListener('input', () => {
                 const q = destInput.value.trim();
                 clearTimeout(suggestTimer);
@@ -1112,13 +1179,18 @@
                     travelMode: 'motorcycle',
                     instructionsType: 'coded',
                     language: 'en-US',
-                    hilliness: 'high',
-                    windingness: 'high',
                     routeRepresentation: 'polyline',
                     computeTravelTimeFor: 'all',
-                    routeType: 'thrilling',
                     traffic: 'true'
                 });
+
+                if (funModeToggle.checked) {
+                    params.set('routeType', 'thrilling');
+                    params.set('hilliness', 'high');
+                    params.set('windingness', 'high');
+                } else {
+                    params.set('routeType', 'fastest');
+                }
                 const url = `https://api.tomtom.com/routing/1/calculateRoute/${origin[1]},${origin[0]}:${dest[1]},${dest[0]}/json?${params.toString()}`;
 
                 const res = await fetch(url);
