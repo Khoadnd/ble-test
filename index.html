@@ -487,9 +487,11 @@
         const MAP_PTS_MAX = 12;
         const MAP_ZOOM = 16;
         const MAP_RADIUS_M = 240;
-        const MAP_UPDATE_DIST_M = 10;
-        const MAP_UPDATE_HEADING_DEG = 4;
-        const MAP_UPDATE_MS = 1200;
+        const MAP_UPDATE_DIST_M = 6;
+        const MAP_UPDATE_HEADING_DEG = 2;
+        const MAP_UPDATE_MS = 700;
+        const MAP_SEND_MIN_INTERVAL = 250;
+        const MAP_TILE_NEIGHBOR = 1; // fetch center tile + neighbors for better road coverage
         const OFF_ROUTE_METERS = 50;
         const OFF_ROUTE_HITS = 3;
         const REROUTE_COOLDOWN_MS = 20000;
@@ -812,7 +814,7 @@
             }
 
             const now = Date.now();
-            const minInterval = 500;
+            const minInterval = MAP_SEND_MIN_INTERVAL;
             const elapsed = now - lastMapSendAt;
             if (elapsed < minInterval) {
                 pendingMapSegments = cloneMapSegments(segments);
@@ -1584,11 +1586,8 @@
 
         async function getVectorTileLines(lon, lat) {
             if (!TOMTOM_KEY) return [];
-            const tile = lonLatToTile(lon, lat, MAP_ZOOM);
-            const key = `${MAP_ZOOM}/${tile.x}/${tile.y}`;
-            if (tileCache.has(key)) {
-                return tileCache.get(key);
-            }
+            const center = lonLatToTile(lon, lat, MAP_ZOOM);
+            const z2 = Math.pow(2, MAP_ZOOM);
 
             const libsReady = await ensureVectorTileLibs();
             const VectorTile = getVectorTileCtor();
@@ -1598,8 +1597,19 @@
                 return [];
             }
 
-            try {
-                const url = `https://api.tomtom.com/map/1/tile/basic/main/${MAP_ZOOM}/${tile.x}/${tile.y}.pbf?key=${encodeURIComponent(TOMTOM_KEY)}`;
+            async function fetchTileLines(tileX, tileY) {
+                let x = tileX;
+                let y = tileY;
+                if (x < 0) x = (x % z2 + z2) % z2;
+                if (x >= z2) x = x % z2;
+                if (y < 0 || y >= z2) return [];
+
+                const key = `${MAP_ZOOM}/${x}/${y}`;
+                if (tileCache.has(key)) {
+                    return tileCache.get(key);
+                }
+
+                const url = `https://api.tomtom.com/map/1/tile/basic/main/${MAP_ZOOM}/${x}/${y}.pbf?key=${encodeURIComponent(TOMTOM_KEY)}`;
                 const res = await fetch(url);
                 if (!res.ok) return [];
                 const buf = await res.arrayBuffer();
@@ -1616,7 +1626,7 @@
                         const geom = feature.loadGeometry();
                         for (const line of geom) {
                             if (line.length < 2) continue;
-                            const linePts = line.map(pt => tileCoordToLonLat(tile.x, tile.y, MAP_ZOOM, pt.x, pt.y, extent));
+                            const linePts = line.map(pt => tileCoordToLonLat(x, y, MAP_ZOOM, pt.x, pt.y, extent));
                             lines.push(linePts);
                         }
                     }
@@ -1624,6 +1634,22 @@
                 if (tileCache.size > 6) tileCache.clear();
                 tileCache.set(key, lines);
                 return lines;
+            }
+
+            try {
+                const jobs = [];
+                for (let dx = -MAP_TILE_NEIGHBOR; dx <= MAP_TILE_NEIGHBOR; dx++) {
+                    for (let dy = -MAP_TILE_NEIGHBOR; dy <= MAP_TILE_NEIGHBOR; dy++) {
+                        jobs.push(fetchTileLines(center.x + dx, center.y + dy));
+                    }
+                }
+
+                const tileResults = await Promise.all(jobs);
+                const all = [];
+                for (const arr of tileResults) {
+                    if (Array.isArray(arr) && arr.length) all.push(...arr);
+                }
+                return all;
             } catch (e) {
                 log('Vector tile error: ' + e.message, 'err');
                 return [];
@@ -1663,6 +1689,23 @@
             return simplifySegment(seg, MAP_PTS_MAX);
         }
 
+        function scoreSegment(seg) {
+            if (!seg || seg.length < 2) return -Infinity;
+            let minR2 = Infinity;
+            let len = 0;
+            for (let i = 0; i < seg.length; i++) {
+                const p = seg[i];
+                const r2 = (p.x * p.x) + (p.y * p.y);
+                if (r2 < minR2) minR2 = r2;
+                if (i > 0) {
+                    const a = seg[i - 1];
+                    len += Math.hypot(p.x - a.x, p.y - a.y);
+                }
+            }
+            const proximity = 40000 - Math.min(40000, minR2); // closer roads get higher score
+            return proximity + (len * 12);
+        }
+
         async function maybeUpdateMapBackground(headingDeg) {
             if (!navigating || !currentPos || isRerouting) return;
             const now = Date.now();
@@ -1689,12 +1732,16 @@
 
             const lines = Array.isArray(lastTileLines) ? lastTileLines : [];
             const originPt = turf.point(currentPos);
-            const segments = [];
+            const candidates = [];
             for (const line of lines) {
-                if (segments.length >= MAP_SEG_MAX) break;
                 const seg = lineToSegment(line, originPt, headingDeg);
-                if (seg && seg.length >= 2) segments.push(seg);
+                if (seg && seg.length >= 2) {
+                    candidates.push({ seg, score: scoreSegment(seg) });
+                }
             }
+
+            candidates.sort((a, b) => b.score - a.score);
+            const segments = candidates.slice(0, MAP_SEG_MAX).map(c => c.seg);
             if (segments.length) {
                 sendMapPacket(segments);
             }
